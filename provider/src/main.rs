@@ -1,5 +1,7 @@
+mod config;
 mod w1_therm;
 
+use crate::config::Config;
 use reqwest::Client;
 use rtherm_common::ProvideRequest;
 use std::time::Duration;
@@ -9,6 +11,10 @@ const PERIOD: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() -> ! {
+    let config = Config::read("config.toml")
+        .await
+        .expect("Error reading config");
+
     let client = Client::new();
     println!("Provider started");
 
@@ -24,9 +30,9 @@ async fn main() -> ! {
         };
 
         match client
-            .post("http://192.168.0.2:8080/provide")
+            .post(format!("{}/provide", config.server))
             .json(&ProvideRequest {
-                source: "berezki-rpi".into(),
+                source: config.name.clone(),
                 measurements,
             })
             .send()

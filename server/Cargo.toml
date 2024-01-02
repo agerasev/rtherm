@@ -10,6 +10,10 @@ repository.workspace = true
 license.workspace = true
 readme.workspace = true
 
+[features]
+sqlite = []
+
 [dependencies]
 rtherm-common = { workspace = true }
 actix-web = "4"
+actix-files = "0.6.2"
