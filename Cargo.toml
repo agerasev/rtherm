@@ -1,0 +1,13 @@
+[workspace]
+members = ["common", "provider", "server"]
+resolver = "2"
+
+[workspace.package]
+authors = ["Alexey Gerasev <alexey.gerasev@gmail.com>"]
+homepage = "https://gitlab.com/agerasev/rtherm"
+repository = "https://gitlab.com/agerasev/rtherm.git"
+license = "MIT"
+readme = "README.md"
+
+[workspace.dependencies]
+rtherm-common = { path = "common" }
