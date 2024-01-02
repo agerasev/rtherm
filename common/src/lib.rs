@@ -1,14 +1,19 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, time::SystemTime};
+
+pub type Temperature = f64;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Measurement {
+    pub value: Temperature,
+    pub time: SystemTime,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub type ProviderId = String;
+pub type SensorId = String;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProvideRequest {
+    pub source: ProviderId,
+    pub measurements: HashMap<SensorId, Measurement>,
 }
