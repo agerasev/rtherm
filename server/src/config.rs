@@ -3,9 +3,16 @@ use std::path::Path;
 use tokio::fs;
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct HttpConfig {
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub prefix: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
-    pub name: String,
-    pub server: String,
+    pub http: HttpConfig,
 }
 
 impl Config {

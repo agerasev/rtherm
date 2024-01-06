@@ -32,7 +32,7 @@ const subscribe = () => {
         console.error("Get error:", e);
         setTimeout(subscribe, TIMEOUT);
     };
-    xhttp.open("GET", "/sensors", true);
+    xhttp.open("GET", "../sensors", true);
     xhttp.send();
 }
 

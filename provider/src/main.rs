@@ -37,8 +37,11 @@ async fn main() -> ! {
             })
             .send()
             .await
+            .and_then(|res| res.error_for_status())
         {
-            Ok(_) => (),
+            Ok(_) => {
+                println!("Measurement successfully sent to '{}'", config.server)
+            }
             Err(err) => {
                 println!("Error sending measurements: {}", err);
                 continue;
