@@ -1,41 +1,27 @@
 use rtherm_common::{Measurement as Meas, Temperature as Temp};
 use serde::Serialize;
 use std::{
-    collections::{hash_map::Entry, HashMap},
-    sync::{Arc, RwLock},
+    collections::{HashMap, HashSet},
+    sync::{Arc, OnceLock},
 };
+use teloxide::types::ChatId;
+use tokio::sync::RwLock;
 
-#[derive(Clone, Default)]
-pub struct DbHandle {
-    db: Arc<RwLock<Db>>,
-}
+// FIXME: Don't use global DB.
+pub static DB: OnceLock<DbHandle> = OnceLock::new();
 
-impl DbHandle {
-    pub fn update(&self, id: String, meas: Meas) {
-        match self.db.write().unwrap().sensors.entry(id) {
-            Entry::Vacant(entry) => {
-                entry.insert(Sensor::new(meas));
-            }
-            Entry::Occupied(mut entry) => {
-                entry.get_mut().update(meas);
-            }
-        }
-    }
-
-    pub fn stats(&self) -> HashMap<String, Stats> {
-        self.db
-            .read()
-            .unwrap()
-            .sensors
-            .iter()
-            .map(|(id, sensor)| (id.clone(), sensor.stats()))
-            .collect()
-    }
-}
+pub type DbHandle = Arc<RwLock<Db>>;
 
 #[derive(Default, Debug)]
-struct Db {
-    sensors: HashMap<String, Sensor>,
+pub struct Db {
+    pub sensors: HashMap<String, Sensor>,
+    pub subscribers: HashSet<ChatId>,
+}
+
+impl Db {
+    pub fn handle(self) -> DbHandle {
+        Arc::new(RwLock::new(self))
+    }
 }
 
 #[derive(Debug)]
@@ -45,6 +31,7 @@ pub struct Sensor {
     min: Temp,
     max: Temp,
     count: u64,
+    pub flags: Flags,
 }
 
 impl Sensor {
@@ -55,7 +42,15 @@ impl Sensor {
             min: meas.value,
             max: meas.value,
             last: meas,
+            flags: Flags {
+                online: true,
+                low_temp: false,
+            },
         }
+    }
+
+    pub fn last(&self) -> &Meas {
+        &self.last
     }
 
     pub fn update(&mut self, meas: Meas) {
@@ -64,6 +59,7 @@ impl Sensor {
         self.min = self.min.min(meas.value);
         self.max = self.max.max(meas.value);
         self.last = meas;
+        self.flags.online = true;
     }
 
     pub fn stats(&self) -> Stats {
@@ -74,6 +70,12 @@ impl Sensor {
             max: self.max,
         }
     }
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct Flags {
+    pub online: bool,
+    pub low_temp: bool,
 }
 
 #[derive(Debug, Serialize)]

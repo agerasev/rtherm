@@ -11,8 +11,14 @@ pub struct HttpConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct TelegramConfig {
+    pub token: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub http: HttpConfig,
+    pub telegram: TelegramConfig,
 }
 
 impl Config {
