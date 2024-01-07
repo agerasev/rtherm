@@ -21,7 +21,7 @@ async fn read(data: web::Data<AppData>) -> Result<impl Responder> {
         .await
         .sensors
         .iter()
-        .map(|(id, sensor)| (id.clone(), sensor.stats()))
+        .map(|(id, sensor)| (id.clone(), sensor.values.stats()))
         .collect::<HashMap<_, _>>();
     Ok(web::Json(sensors))
 }
@@ -35,14 +35,11 @@ async fn provide(
     for (name, meas) in request.measurements {
         let id = format!("{}.{}", request.source, name);
         println!("Measurement obtained from '{}': {:?}", id, meas);
-        match db.sensors.entry(id) {
-            Entry::Vacant(entry) => {
-                entry.insert(Sensor::new(meas));
-            }
-            Entry::Occupied(mut entry) => {
-                entry.get_mut().update(meas);
-            }
-        }
+        let sensor = match db.sensors.entry(id) {
+            Entry::Vacant(entry) => entry.insert(Sensor::default()),
+            Entry::Occupied(entry) => entry.into_mut(),
+        };
+        sensor.values.update(meas);
     }
     Ok("Accepted")
 }
@@ -58,5 +55,6 @@ pub async fn serve(config: HttpConfig, db: DbHandle) -> io::Result<()> {
             .service(fs::Files::new(&prefix("/static"), "./static"))
     })
     .bind((config.host, config.port))?;
+    println!("Starting HTTP server ...");
     server.run().await
 }

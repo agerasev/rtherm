@@ -3,10 +3,7 @@ mod db;
 mod http;
 mod telegram;
 
-use crate::{
-    config::Config,
-    db::{Db, DB},
-};
+use crate::{config::Config, db::Db};
 use std::env;
 use tokio::task;
 
@@ -17,7 +14,7 @@ async fn main() {
         Config::read(path).await.expect("Error reading config")
     };
 
-    let db = DB.get_or_init(|| Db::default().handle()).clone();
+    let db = Db::default().handle();
 
     task::spawn(telegram::run(config.telegram, db.clone()));
     http::serve(config.http, db).await.unwrap();

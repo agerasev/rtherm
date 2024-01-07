@@ -1,11 +1,9 @@
 use crate::{
     config::TelegramConfig,
-    db::{DbHandle, DB},
+    db::{Db, DbHandle, Id, Values},
 };
-use rtherm_common::Temperature as Temp;
 use std::{
-    collections::HashMap,
-    sync::Arc,
+    collections::{hash_map::Entry, HashMap},
     time::{Duration, SystemTime},
 };
 use teloxide::{prelude::*, utils::command::BotCommands};
@@ -19,31 +17,31 @@ use tokio::{task::spawn, time::sleep};
 enum Command {
     #[command(description = "display this text.")]
     Help,
-    #[command(description = "read all sensors.")]
-    Read,
+    #[command(description = "show all sensors data.")]
+    Digest,
     #[command(description = "subscribe to alerts and daily digest.")]
     Subscribe,
 }
 
-async fn digest(db: &DbHandle) -> String {
-    let sensors = db
-        .read()
-        .await
-        .sensors
-        .iter()
-        .map(|(id, sensor)| (id.clone(), sensor.stats()))
-        .collect::<HashMap<_, _>>();
-    format!("{:?}", sensors)
+fn make_digest(db: &Db) -> String {
+    let mut text = String::new();
+    for (id, sensor) in db.sensors.iter() {
+        let stats = sensor.values.stats();
+        text = format!("{}\n`{}`:\n{}", text, id, stats);
+    }
+    text
 }
 
-async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
-    let db = DB.get().unwrap().clone();
+async fn answer(bot: Bot, msg: Message, cmd: Command, db: DbHandle) -> ResponseResult<()> {
     match cmd {
         Command::Help => {
             bot.send_message(msg.chat.id, Command::descriptions().to_string())
                 .await?
         }
-        Command::Read => bot.send_message(msg.chat.id, digest(&db).await).await?,
+        Command::Digest => {
+            bot.send_message(msg.chat.id, make_digest(&*db.read().await))
+                .await?
+        }
         Command::Subscribe => {
             bot.send_message(
                 msg.chat.id,
@@ -61,52 +59,80 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
 }
 
 pub async fn run(config: TelegramConfig, db: DbHandle) {
-    assert!(Arc::ptr_eq(&db, DB.get().unwrap()));
-    println!("Starting telegram bot...");
+    println!("Starting telegram bot ...");
     let bot = Bot::new(config.token);
-    spawn(monitor(bot.clone(), db));
-    Command::repl(bot, answer).await;
+    spawn(monitor(bot.clone(), db.clone()));
+    Command::repl(bot, move |bot, msg, cmd| answer(bot, msg, cmd, db.clone())).await;
 }
 
-const TEMP_THRESHOLD: Temp = 30.0;
-const TEMP_HYSTERESYS: Temp = 5.0;
-const OFFLINE_TIMEOUT: Duration = Duration::from_secs(60);
+#[derive(Default, Debug)]
+pub struct SensorState {
+    pub is_offline: bool,
+    pub is_low: bool,
+}
+
+const MONITOR_PERIOD: Duration = Duration::from_secs(10);
 const DIGEST_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
 
 async fn monitor(bot: Bot, db: DbHandle) -> ResponseResult<()> {
     let mut last_digest = SystemTime::now();
-    loop {
-        sleep(Duration::from_secs(30)).await;
-        let mut db = db.write().await;
-        let mut messages = Vec::<String>::new();
+    let mut sensors_state = HashMap::<Id, SensorState>::new();
 
-        for (id, sensor) in db.sensors.iter_mut() {
-            if !sensor.flags.low_temp {
-                if sensor.last().value < TEMP_THRESHOLD {
-                    sensor.flags.low_temp = true;
+    loop {
+        sleep(MONITOR_PERIOD).await;
+
+        let mut messages = Vec::<String>::new();
+        let now = SystemTime::now();
+
+        for (id, sensor) in db.read().await.sensors.iter() {
+            let last = match sensor.values.last() {
+                Some(m) => m,
+                None => continue,
+            };
+            let settings = &sensor.settings;
+
+            let state = match sensors_state.entry(id.clone()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => entry.insert(SensorState::default()),
+            };
+
+            if !state.is_low {
+                if last.value < settings.low_temp {
+                    state.is_low = true;
                     messages.push(format!(
-                        "Alert! Sensor `{}` temperature is lower than {} C.",
-                        id, TEMP_THRESHOLD,
+                        "**Alert!**\n`{}` temperature is lower than **{}** °C.",
+                        id, settings.low_temp,
                     ));
                 }
-            } else if sensor.last().value > TEMP_THRESHOLD + TEMP_HYSTERESYS {
-                sensor.flags.low_temp = false;
+            } else if last.value >= settings.safe_temp {
+                state.is_low = false;
             }
 
-            if sensor.flags.online && sensor.last().time + OFFLINE_TIMEOUT < SystemTime::now() {
-                sensor.flags.online = false;
-                messages.push(format!("Alert! Sensor `{}` is offline.", id));
+            if !state.is_offline && last.time + settings.timeout <= now {
+                state.is_offline = true;
+                messages.push(format!("**Alert!**\n`{}` is offline.", id));
             }
-
-            if last_digest + DIGEST_PERIOD < SystemTime::now() {
-                last_digest = SystemTime::now();
-                messages.push("/read".into());
+            if state.is_offline && last.time + settings.timeout > now {
+                state.is_offline = false;
+                messages.push(format!("`{}` is online again.", id));
             }
         }
 
-        for msg in messages {
-            if let Err(err) = send_to_all(&bot, db.subscribers.iter().copied(), msg).await {
-                println!("Error sending notification: {}", err);
+        if last_digest + DIGEST_PERIOD <= now {
+            let mut db = db.write().await;
+            last_digest = now;
+            messages.push(make_digest(&db));
+            for sensor in db.sensors.values_mut() {
+                sensor.values = Values::default();
+            }
+        }
+
+        {
+            let db = db.read().await;
+            for msg in messages {
+                if let Err(err) = send_to_all(&bot, db.subscribers.iter().copied(), msg).await {
+                    println!("Error sending notification: {}", err);
+                }
             }
         }
     }
