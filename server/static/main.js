@@ -4,23 +4,23 @@ const main = () => {
 
 window.onload = main;
 
-export const render = (sensors) => {
-    const root = document.getElementById("sensors");
+export const render = (channels) => {
+    const root = document.getElementById("channels");
 
     let text = "";
-    for (const name in sensors) {
-        const sensor = sensors[name]
-        const date = seconds_to_date(sensor.last.time);
+    for (const name in channels) {
+        const channel = channels[name]
+        const date = seconds_to_date(channel.last.time);
         text += `<div><h3>${name}</h3>`
         text += `<div>updated: ${format_date(date)}</div>`
-        text += `<div>value: <b>${sensor.last.value}</b> °C</div>`
-        text += `<div>min: <b>${sensor.min}</b> °C</div>`
-        text += `<div>max: <b>${sensor.max}</b> °C</div>`
-        text += `<div>average: <b>${sensor.mean}</b> °C</div>`
+        text += `<div>value: <b>${channel.last.value}</b></div>`
+        text += `<div>min: <b>${channel.min}</b></div>`
+        text += `<div>max: <b>${channel.max}</b></div>`
+        text += `<div>average: <b>${channel.mean}</b></div>`
         text += `</div>`
     }
     if (text.length === 0) {
-        text = "<i>No sensors</i>"
+        text = "<i>No channels</i>"
     }
 
     root.innerHTML = text;
@@ -38,7 +38,7 @@ const subscribe = () => {
         console.error("Get error:", e);
         setTimeout(subscribe, TIMEOUT);
     };
-    xhttp.open("GET", "../sensors", true);
+    xhttp.open("GET", "../info", true);
     xhttp.send();
 }
 

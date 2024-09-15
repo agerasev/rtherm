@@ -1,11 +1,5 @@
-mod config;
-mod db;
-mod http;
-mod telegram;
-
-use crate::{config::Config, db::Db};
+use rtherm::{config::Config, http, telegram::Telegram};
 use std::env;
-use tokio::task;
 
 #[tokio::main]
 async fn main() {
@@ -13,9 +7,6 @@ async fn main() {
         let path = env::args().nth(1).expect("Path to config must be provided");
         Config::read(path).await.expect("Error reading config")
     };
-
-    let db = Db::default().handle();
-
-    task::spawn(telegram::run(config.telegram, db.clone()));
-    http::serve(config.http, db).await.unwrap();
+    let telegram = Telegram::new(config.telegram).await;
+    http::serve(config.http, telegram).await.unwrap();
 }

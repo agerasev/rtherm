@@ -1,60 +1,63 @@
-use crate::{
-    config::HttpConfig,
-    db::{DbHandle, Sensor},
-};
+use crate::{config::HttpConfig, recepient::Recepient, statistics::Statistics};
 use actix_files as fs;
 use actix_web::{web, App, HttpServer, Responder, Result};
 use rtherm_common::ProvideRequest;
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    io,
-};
+use std::{collections::HashMap, io};
+use tokio::sync::Mutex;
 
-struct AppData {
-    db: DbHandle,
+struct State<R: Recepient> {
+    info: Statistics,
+    recepient: R,
 }
 
-async fn read(data: web::Data<AppData>) -> Result<impl Responder> {
-    let sensors = data
-        .db
-        .read()
+async fn info<R: Recepient>(data: web::Data<Mutex<State<R>>>) -> Result<impl Responder> {
+    let info = data
+        .lock()
         .await
-        .sensors
+        .info
+        .channels
         .iter()
-        .map(|(id, sensor)| (id.clone(), sensor.values.stats()))
+        .map(|(id, values)| (id.clone(), values.statistics()))
         .collect::<HashMap<_, _>>();
-    Ok(web::Json(sensors))
+
+    Ok(web::Json(info))
 }
 
-async fn provide(
-    data: web::Data<AppData>,
+async fn provide<R: Recepient>(
+    data: web::Data<Mutex<State<R>>>,
     request: web::Json<ProvideRequest>,
 ) -> Result<&'static str> {
     let request = request.into_inner();
-    let mut db = data.db.write().await;
+
+    let mut guard = data.lock().await;
+    let State { info, recepient } = &mut *guard;
     for (name, meas) in request.measurements {
-        let id = format!("{}.{}", request.source, name);
-        println!("Measurement obtained from '{}': {:?}", id, meas);
-        let sensor = match db.sensors.entry(id) {
-            Entry::Vacant(entry) => entry.insert(Sensor::default()),
-            Entry::Occupied(entry) => entry.into_mut(),
-        };
-        sensor.values.update(meas);
+        let channel_id = format!("{}.{}", request.source, name);
+        println!("Measurement obtained from '{}': {:?}", channel_id, meas);
+        info.update(channel_id.clone(), meas);
+        recepient.update(channel_id, meas).await.unwrap();
     }
+
     Ok("Accepted")
 }
 
-pub async fn serve(config: HttpConfig, db: DbHandle) -> io::Result<()> {
+pub async fn serve<R: Recepient + Send + 'static>(
+    config: HttpConfig,
+    recepient: R,
+) -> io::Result<()> {
     let prefix = move |path: &str| format!("{}{}", config.prefix, path);
-    let state = web::Data::new(AppData { db });
+    let state = web::Data::new(Mutex::new(State {
+        info: Statistics::default(),
+        recepient,
+    }));
     let server = HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
-            .route(&prefix("/sensors"), web::get().to(read))
-            .route(&prefix("/provide"), web::post().to(provide))
-            .service(fs::Files::new(&prefix("/static"), "./static"))
+            .route(&prefix("/info"), web::get().to(info::<R>))
+            .route(&prefix("/provide"), web::post().to(provide::<R>))
+            .service(fs::Files::new(&prefix("/"), "./static"))
     })
     .bind((config.host, config.port))?;
-    println!("Starting HTTP server ...");
+    println!("Running HTTP server");
     server.run().await
 }

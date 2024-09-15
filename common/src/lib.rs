@@ -1,11 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::SystemTime};
 
-pub type Temperature = f64;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Measurement {
-    pub value: Temperature,
+    pub value: f64,
     #[serde(with = "unix_secs")]
     pub time: SystemTime,
 }
