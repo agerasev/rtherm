@@ -1,3 +1,5 @@
+pub mod error;
+
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::SystemTime};
 

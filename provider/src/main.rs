@@ -1,33 +1,54 @@
 mod config;
+#[cfg(feature = "dummy")]
+mod dummy;
+mod provider;
+#[cfg(feature = "w1_therm")]
 mod w1_therm;
 
 use crate::config::Config;
+use provider::{AnyProvider, Provider};
 use reqwest::Client;
 use rtherm_common::ProvideRequest;
-use std::time::Duration;
+use std::{collections::HashMap, env, time::Duration};
 use tokio::time::sleep;
 
 const PERIOD: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() -> ! {
-    let config = Config::read("config.toml")
-        .await
-        .expect("Error reading config");
+    let config = {
+        let path = env::args().nth(1).expect("Path to config must be provided");
+        Config::read(path).await.expect("Error reading config")
+    };
+
+    let mut providers = Vec::<AnyProvider>::new();
+    #[cfg(feature = "w1_therm")]
+    {
+        providers.push(AnyProvider::new(w1_therm::W1Therm));
+        println!("W1Therm provider created");
+    }
+    #[cfg(feature = "dummy")]
+    {
+        providers.push(AnyProvider::new(dummy::Dummy::default()));
+        println!("Dummy provider created");
+    }
 
     let client = Client::new();
-    println!("Provider started");
+    println!("Client started");
 
     loop {
         sleep(PERIOD).await;
 
-        let measurements = match w1_therm::read_all().await {
-            Ok(meas) => meas,
-            Err(err) => {
-                println!("W1 error: {}", err);
-                continue;
-            }
-        };
+        let mut measurements = HashMap::new();
+        for provider in &mut providers {
+            match provider.read_all().await {
+                Ok(meas) => measurements.extend(meas),
+                Err(err) => {
+                    println!("Provider error: {}", err);
+                    continue;
+                }
+            };
+        }
 
         match client
             .post(format!("{}/provide", config.server))
