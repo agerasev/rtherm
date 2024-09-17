@@ -9,7 +9,7 @@ use crate::config::Config;
 use provider::{AnyProvider, Provider};
 use reqwest::Client;
 use rtherm_common::ProvideRequest;
-use std::{collections::HashMap, env, time::Duration};
+use std::{env, time::Duration};
 use tokio::time::sleep;
 
 const PERIOD: Duration = Duration::from_secs(10);
@@ -39,16 +39,13 @@ async fn main() -> ! {
     loop {
         sleep(PERIOD).await;
 
-        let mut measurements = HashMap::new();
-        for provider in &mut providers {
-            match provider.read_all().await {
-                Ok(meas) => measurements.extend(meas),
-                Err(err) => {
-                    println!("Provider error: {}", err);
-                    continue;
-                }
-            };
-        }
+        let measurements = match providers.read_all().await {
+            Ok(meas) => meas,
+            Err(err) => {
+                println!("Provider error: {}", err);
+                continue;
+            }
+        };
 
         match client
             .post(format!("{}/provide", config.server))
@@ -61,7 +58,7 @@ async fn main() -> ! {
             .and_then(|res| res.error_for_status())
         {
             Ok(_) => {
-                println!("Measurement successfully sent to '{}'", config.server)
+                println!("Measurements successfully sent to '{}'", config.server)
             }
             Err(err) => {
                 println!("Error sending measurements: {}", err);

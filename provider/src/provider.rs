@@ -2,21 +2,21 @@ use futures::FutureExt;
 use rtherm_common::{error::AnyError, Measurement};
 use std::{collections::HashMap, error::Error, future::Future, pin::Pin};
 
-pub trait Provider {
-    type Error: Error + 'static;
+pub trait Provider: Send {
+    type Error: Error + Send;
     fn read_all(
         &mut self,
     ) -> impl Future<Output = Result<HashMap<String, Measurement>, Self::Error>> + Send + '_;
 }
 
 #[allow(clippy::type_complexity)]
-pub trait DynProvider {
+trait DynProvider: Send {
     fn read_all_any(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<HashMap<String, Measurement>, AnyError>> + Send + '_>>;
 }
 
-impl<P: Provider> DynProvider for P {
+impl<P: Provider<Error: 'static>> DynProvider for P {
     fn read_all_any(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<HashMap<String, Measurement>, AnyError>> + Send + '_>>
@@ -25,10 +25,10 @@ impl<P: Provider> DynProvider for P {
     }
 }
 
-pub struct AnyProvider(pub Box<dyn DynProvider>);
+pub struct AnyProvider(Box<dyn DynProvider>);
 
 impl AnyProvider {
-    pub fn new<P: Provider + 'static>(provider: P) -> Self {
+    pub fn new<P: Provider<Error: 'static> + 'static>(provider: P) -> Self {
         Self(Box::new(provider))
     }
 }
@@ -39,5 +39,18 @@ impl Provider for AnyProvider {
         &mut self,
     ) -> impl Future<Output = Result<HashMap<String, Measurement>, Self::Error>> + Send + '_ {
         self.0.read_all_any()
+    }
+}
+
+impl<P: Provider> Provider for Vec<P> {
+    type Error = P::Error;
+    async fn read_all(&mut self) -> Result<HashMap<String, Measurement>, Self::Error> {
+        let mut measurements = HashMap::new();
+        for p in self {
+            // FIXME: Error on name collision
+            measurements.extend(p.read_all().await?);
+        }
+        // FIXME: Return both measurements and errors
+        Ok(measurements)
     }
 }

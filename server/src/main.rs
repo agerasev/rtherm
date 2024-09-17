@@ -1,4 +1,4 @@
-use rtherm::{config::Config, db::Db, http, telegram::Telegram};
+use rtherm::{config::Config, db::Db, http, recepient::AnyRecepient};
 use sqlx::Connection;
 use std::env;
 
@@ -9,23 +9,36 @@ async fn main() {
         Config::read(path).await.expect("Error reading config")
     };
 
+    let mut recepients = Vec::<AnyRecepient>::new();
+
     #[cfg(feature = "postgres")]
-    let client =
-        sqlx::postgres::PgConnection::connect("postgres://postgres:password@localhost/test")
-            .await
-            .unwrap();
-    #[cfg(feature = "sqlite")]
-    let client = sqlx::sqlite::SqliteConnection::connect("../data/database.db")
+    if let Some(db_config) = config.db.and_then(|db| db.postgres) {
+        let conn = sqlx::postgres::PgConnection::connect(&format!(
+            "postgres://{}:{}@{}/rtherm",
+            db_config.user, db_config.password, db_config.host
+        ))
         .await
         .unwrap();
-    #[cfg(any(
-        all(feature = "postgres", feature = "sqlite"),
-        not(any(feature = "postgres", feature = "sqlite"))
-    ))]
-    let client: sqlx::AnyConnection =
-        unimplemented!("One of `postgres` or `sqlite` features should be selected");
-    let db = Db::new(client).await.unwrap();
+        recepients.push(AnyRecepient::new(Db::new(conn).await.unwrap()));
+        println!("Postgres database connected");
+    }
 
-    //let telegram = Telegram::new(config.telegram).await;
-    http::serve(config.http, db).await.unwrap();
+    #[cfg(feature = "sqlite")]
+    if let Some(db_config) = config.db.and_then(|db| db.sqlite) {
+        let conn = sqlx::sqlite::SqliteConnection::connect(&db_config.path)
+            .await
+            .unwrap();
+        recepients.push(AnyRecepient::new(Db::new(conn).await.unwrap()));
+        println!("SQLite database connected");
+    }
+
+    #[cfg(feature = "telegram")]
+    if let Some(tg_config) = config.telegram {
+        recepients.push(AnyRecepient::new(
+            rtherm::telegram::Telegram::new(tg_config).await,
+        ));
+        println!("Telegram bot started");
+    }
+
+    http::serve(config.http, recepients).await.unwrap();
 }

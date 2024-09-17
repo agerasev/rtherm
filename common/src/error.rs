@@ -4,10 +4,10 @@ use std::{
 };
 
 #[derive(Debug)]
-pub struct AnyError(pub Box<dyn Error>);
+pub struct AnyError(pub Box<dyn Error + Send>);
 
 impl AnyError {
-    pub fn new<E: Error + 'static>(error: E) -> Self {
+    pub fn new<E: Error + Send + 'static>(error: E) -> Self {
         AnyError(Box::new(error))
     }
 }

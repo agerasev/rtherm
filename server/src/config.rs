@@ -11,6 +11,24 @@ pub struct HttpConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct PostgresConfig {
+    pub host: String,
+    pub user: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SqliteConfig {
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DbConfig {
+    pub postgres: Option<PostgresConfig>,
+    pub sqlite: Option<SqliteConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct TelegramConfig {
     pub token: String,
 }
@@ -18,7 +36,8 @@ pub struct TelegramConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub http: HttpConfig,
-    pub telegram: TelegramConfig,
+    pub db: Option<DbConfig>,
+    pub telegram: Option<TelegramConfig>,
 }
 
 impl Config {

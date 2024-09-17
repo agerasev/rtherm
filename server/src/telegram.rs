@@ -151,7 +151,6 @@ impl Telegram {
             let state = state.clone();
             move |bot, msg, cmd| answer(bot, msg, cmd, state.clone())
         }));
-        println!("Telegram bot started");
         Self { bot, state }
     }
 }
