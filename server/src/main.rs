@@ -1,12 +1,16 @@
-use rtherm::{config::Config, db::Db, http, recepient::AnyRecepient};
+use rtherm_server::{config::Config, db::Db, http, recepient::AnyRecepient};
 use sqlx::Connection;
 use std::env;
 
 #[tokio::main]
 async fn main() {
     let config = {
-        let path = env::args().nth(1).expect("Path to config must be provided");
-        Config::read(path).await.expect("Error reading config")
+        let path = env::args()
+            .nth(1)
+            .expect("Path to config must be provided as argument");
+        Config::read(&path)
+            .await
+            .unwrap_or_else(|e| panic!("Error reading config from {path:?}: {e}"))
     };
 
     let mut recepients = Vec::<AnyRecepient>::new();
@@ -35,7 +39,7 @@ async fn main() {
     #[cfg(feature = "telegram")]
     if let Some(tg_config) = config.telegram {
         recepients.push(AnyRecepient::new(
-            rtherm::telegram::Telegram::new(tg_config).await,
+            rtherm_server::telegram::Telegram::new(tg_config).await,
         ));
         println!("Telegram bot started");
     }

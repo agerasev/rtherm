@@ -1,9 +1,9 @@
 [package]
-name = "rtherm-provider"
+name = "rtherm-client"
 version = "0.1.0"
 edition = "2021"
 
-description = "RTherm provider"
+description = "RTherm client"
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true

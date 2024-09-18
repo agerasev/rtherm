@@ -1,0 +1,23 @@
+version: "3"
+
+services:
+  rtherm-server:
+    image: rtherm-server:latest
+    environment:
+      - RTHERM_CONFIG=docker.toml
+    volumes:
+      - /data/rtherm/server:/srv
+    ports:
+      - 8080:8080
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:14
+    restart: always
+    environment:
+      - POSTGRES_USER=rtherm
+      - POSTGRES_PASSWORD=rtherm
+      - POSTGRES_DB=rtherm
+    volumes:
+      - /data/rtherm/postgres:/var/lib/postgresql/data

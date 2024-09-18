@@ -18,7 +18,7 @@ where
     for<'q> <C::Database as Database>::Arguments<'q>: IntoArguments<'q, C::Database>,
 {
     pub async fn new(mut client: C) -> Result<Self, Error> {
-        sqlx::query("CREATE TABLE IF NOT EXISTS Measurements (channel_id VARCHAR, value FLOAT, time DATETIME)").execute(&mut client).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS Measurements (channel_id VARCHAR, value FLOAT, time TIMESTAMP)").execute(&mut client).await?;
         Ok(Self { client })
     }
 }
