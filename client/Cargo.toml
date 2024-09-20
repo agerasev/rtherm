@@ -1,6 +1,6 @@
 [package]
 name = "rtherm-client"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 description = "RTherm client"
@@ -11,7 +11,7 @@ license.workspace = true
 readme.workspace = true
 
 [features]
-default = ["w1_therm"]
+default = ["dummy", "w1_therm"]
 w1_therm = []
 dummy = []
 
@@ -25,3 +25,5 @@ reqwest = { version = "0.11", default-features = false, features = [
 ] }
 serde = { version = "1.0.193", features = ["derive"] }
 toml = "0.8.8"
+log.workspace = true
+env_logger.workspace = true

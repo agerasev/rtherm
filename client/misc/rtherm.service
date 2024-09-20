@@ -1,0 +1,13 @@
+[Unit]
+Description=RTherm client service
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/rtherm
+ExecStart=/opt/rtherm/rtherm-client config/berezki.toml
+Environment="RUST_LOG=info"
+User=1000
+Group=1000
+
+[Install]
+WantedBy=multi-user.target

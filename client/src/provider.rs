@@ -1,27 +1,26 @@
-use futures::FutureExt;
-use rtherm_common::{error::AnyError, Measurement};
-use std::{collections::HashMap, error::Error, future::Future, pin::Pin};
+use futures::{future::join_all, FutureExt};
+use rtherm_common::{error::AnyError, merge_groups, Measurements};
+use std::{error::Error, future::Future, pin::Pin};
 
 pub trait Provider: Send {
     type Error: Error + Send;
-    fn read_all(
-        &mut self,
-    ) -> impl Future<Output = Result<HashMap<String, Measurement>, Self::Error>> + Send + '_;
+    fn measure(&mut self) -> impl Future<Output = (Measurements, Vec<Self::Error>)> + Send + '_;
 }
 
-#[allow(clippy::type_complexity)]
 trait DynProvider: Send {
-    fn read_all_any(
+    fn read_any(
         &mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<HashMap<String, Measurement>, AnyError>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = (Measurements, Vec<AnyError>)> + Send + '_>>;
 }
 
 impl<P: Provider<Error: 'static>> DynProvider for P {
-    fn read_all_any(
+    fn read_any(
         &mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<HashMap<String, Measurement>, AnyError>> + Send + '_>>
-    {
-        Box::pin(self.read_all().map(|r| r.map_err(AnyError::new)))
+    ) -> Pin<Box<dyn Future<Output = (Measurements, Vec<AnyError>)> + Send + '_>> {
+        Box::pin(
+            self.measure()
+                .map(|(meas, errs)| (meas, errs.into_iter().map(AnyError::new).collect())),
+        )
     }
 }
 
@@ -35,22 +34,18 @@ impl AnyProvider {
 
 impl Provider for AnyProvider {
     type Error = AnyError;
-    fn read_all(
-        &mut self,
-    ) -> impl Future<Output = Result<HashMap<String, Measurement>, Self::Error>> + Send + '_ {
-        self.0.read_all_any()
+    fn measure(&mut self) -> impl Future<Output = (Measurements, Vec<Self::Error>)> + Send + '_ {
+        self.0.read_any()
     }
 }
 
 impl<P: Provider> Provider for Vec<P> {
     type Error = P::Error;
-    async fn read_all(&mut self) -> Result<HashMap<String, Measurement>, Self::Error> {
-        let mut measurements = HashMap::new();
-        for p in self {
-            // FIXME: Error on name collision
-            measurements.extend(p.read_all().await?);
-        }
-        // FIXME: Return both measurements and errors
-        Ok(measurements)
+    async fn measure(&mut self) -> (Measurements, Vec<Self::Error>) {
+        let (meas, errors): (Vec<_>, Vec<_>) = join_all(self.iter_mut().map(|p| p.measure()))
+            .await
+            .into_iter()
+            .unzip();
+        (merge_groups(meas), errors.into_iter().flatten().collect())
     }
 }

@@ -1,13 +1,9 @@
-use crate::{
-    config::TelegramConfig,
-    recepient::{ChannelId, Recepient},
-    statistics::ChannelHistory,
-};
-use rtherm_common::Measurement;
+use crate::{config::TelegramConfig, recepient::Recepient, statistics::ChannelHistory};
+use rtherm_common::{ChannelId, Measurements};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    ops::Range,
+    ops::RangeInclusive,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -22,8 +18,33 @@ struct CommonSettings {
     hysteresis: f64,
 }
 
-fn widen_range(range: Range<f64>, offset: f64) -> Range<f64> {
-    (range.start - offset)..(range.end + offset)
+pub trait RangeExt {
+    type Item: Copy;
+    fn widen(&self, offset: Self::Item) -> Self;
+    fn contains_range(&self, other: &Self) -> bool;
+    fn display(&self) -> String;
+}
+
+impl RangeExt for RangeInclusive<f64> {
+    type Item = f64;
+    fn widen(&self, offset: f64) -> Self {
+        if self.start() - 2.0 * offset > *self.end() {
+            let center = 0.5 * (self.start() + self.end());
+            center..=center
+        } else {
+            (self.start() - offset)..=(self.end() + offset)
+        }
+    }
+    fn contains_range(&self, other: &Self) -> bool {
+        self.start() <= other.start() && other.end() <= self.end()
+    }
+    fn display(&self) -> String {
+        if self.start() == self.end() {
+            format!("{}", self.start())
+        } else {
+            format!("[{}, {}]", self.start(), self.end())
+        }
+    }
 }
 
 impl Default for CommonSettings {
@@ -40,13 +61,13 @@ struct ChannelSettings {
     /// Range of good values for a channel.
     ///
     /// Values outside of this range considered to be bad.
-    normal_range: Range<f64>,
+    normal_range: RangeInclusive<f64>,
 }
 
 impl Default for ChannelSettings {
     fn default() -> Self {
         Self {
-            normal_range: 30.0..80.0,
+            normal_range: 30.0..=80.0,
         }
     }
 }
@@ -158,7 +179,7 @@ impl Telegram {
 impl Recepient for Telegram {
     type Error = RequestError;
 
-    async fn update(&mut self, channel_id: ChannelId, meas: Measurement) -> ResponseResult<()> {
+    async fn update(&mut self, measurements: Measurements) -> Vec<RequestError> {
         let Self { bot, state } = self;
         let mut messages = Vec::<(ChatId, String)>::new();
 
@@ -167,54 +188,79 @@ impl Recepient for Telegram {
             let settings = state.settings.clone();
             let now = Instant::now();
 
-            let channel = state.channels.entry(channel_id.clone()).or_default();
-            channel.values.update(meas);
-            let become_online = match channel.last_update {
-                Some(last_update) => last_update + settings.offline_timeout < now,
-                None => true,
-            };
-            channel.last_update = Some(now);
+            for (channel_id, points) in measurements {
+                if points.is_empty() {
+                    continue;
+                }
+                let value_range = points
+                    .iter()
+                    .map(|p| p.value)
+                    .fold(f64::INFINITY..=f64::NEG_INFINITY, |range, value| {
+                        range.start().min(value)..=range.end().max(value)
+                    });
+                let channel = state.channels.entry(channel_id.clone()).or_default();
+                channel.values.update(points);
+                let become_online = match channel.last_update {
+                    Some(last_update) => last_update + settings.offline_timeout < now,
+                    None => true,
+                };
+                channel.last_update = Some(now);
 
-            for (&chat_id, chat) in state.chats.iter_mut() {
-                if let Some(sub) = chat.subscriptions.get_mut(&channel_id) {
-                    if become_online {
-                        messages.push((
-                            chat_id,
-                            format!("`{}` is online (value {}).", channel_id, meas.value),
-                        ));
-                    }
-                    if !sub.is_bad {
-                        if !sub.settings.normal_range.contains(&meas.value) {
-                            sub.is_bad = true;
+                for (&chat_id, chat) in state.chats.iter_mut() {
+                    if let Some(sub) = chat.subscriptions.get_mut(&channel_id) {
+                        if become_online {
                             messages.push((
                                 chat_id,
                                 format!(
-                                    "**Alert!**\n`{}` value {} is out of normal range {:?}.",
-                                    channel_id, meas.value, sub.settings.normal_range
+                                    "`{}` is online (value: {}).",
+                                    channel_id,
+                                    value_range.display(),
                                 ),
                             ));
                         }
-                    } else if widen_range(sub.settings.normal_range.clone(), -settings.hysteresis)
-                        .contains(&meas.value)
-                    {
-                        sub.is_bad = false;
-                        messages.push((
-                            chat_id,
-                            format!(
-                                "`{}` value {} returned to normal range {:?}.",
-                                channel_id, meas.value, sub.settings.normal_range
-                            ),
-                        ));
+                        if !sub.is_bad {
+                            if !&sub.settings.normal_range.contains_range(&value_range) {
+                                sub.is_bad = true;
+                                messages.push((
+                                    chat_id,
+                                    format!(
+                                        "**Alert!**\n`{}` value {} is out of normal range {:?}.",
+                                        channel_id,
+                                        value_range.display(),
+                                        sub.settings.normal_range,
+                                    ),
+                                ));
+                            }
+                        } else if sub
+                            .settings
+                            .normal_range
+                            .widen(-settings.hysteresis)
+                            .contains_range(&value_range)
+                        {
+                            sub.is_bad = false;
+                            messages.push((
+                                chat_id,
+                                format!(
+                                    "`{}` value {} returned to normal range {:?}.",
+                                    channel_id,
+                                    value_range.display(),
+                                    sub.settings.normal_range,
+                                ),
+                            ));
+                        }
                     }
                 }
             }
         }
 
+        let mut errors = Vec::new();
         for (chat_id, message) in messages {
-            bot.send_message(chat_id, message).await?;
+            if let Err(err) = bot.send_message(chat_id, message).await {
+                errors.push(err);
+            }
         }
 
-        Ok(())
+        errors
     }
 }
 

@@ -1,22 +1,42 @@
 pub mod error;
 
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, time::SystemTime};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    time::SystemTime,
+};
 
+/// Single measured point
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct Measurement {
+pub struct Point {
     pub value: f64,
     #[serde(with = "unix_secs")]
     pub time: SystemTime,
 }
 
-pub type ProviderId = String;
-pub type SensorId = String;
+pub type ChannelId = String;
+pub type Measurements = HashMap<ChannelId, Vec<Point>>;
+
+pub fn merge_groups(groups: impl IntoIterator<Item = Measurements>) -> Measurements {
+    let mut accum = HashMap::new();
+    for group in groups {
+        for (channel, measurements) in group {
+            match accum.entry(channel) {
+                Entry::Vacant(e) => {
+                    e.insert(measurements);
+                }
+                Entry::Occupied(mut e) => {
+                    e.get_mut().extend(measurements);
+                }
+            }
+        }
+    }
+    accum
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProvideRequest {
-    pub source: ProviderId,
-    pub measurements: HashMap<SensorId, Measurement>,
+    pub measurements: Measurements,
 }
 
 mod unix_secs {

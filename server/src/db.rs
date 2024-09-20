@@ -1,8 +1,8 @@
 use chrono::{DateTime, Local};
-use rtherm_common::Measurement;
+use rtherm_common::Measurements;
 use sqlx::{Connection, Database, Encode, Error, Executor, IntoArguments, Type};
 
-use crate::recepient::{ChannelId, Recepient};
+use crate::recepient::Recepient;
 
 pub struct Db<C: Connection>
 where
@@ -34,19 +34,24 @@ where
 {
     type Error = Error;
 
-    async fn update(
-        &mut self,
-        channel_id: ChannelId,
-        meas: Measurement,
-    ) -> Result<(), Self::Error> {
-        sqlx::query::<C::Database>(
-            "INSERT INTO Measurements (channel_id, value, time) VALUES ($1, $2, $3)",
-        )
-        .bind(channel_id)
-        .bind(meas.value)
-        .bind(DateTime::<Local>::from(meas.time))
-        .execute(&mut self.client)
-        .await?;
-        Ok(())
+    async fn update(&mut self, meas: Measurements) -> Vec<Self::Error> {
+        // TODO: Use bulk insert
+        let mut errors = Vec::new();
+        for (channel_id, points) in meas {
+            for p in points {
+                if let Err(err) = sqlx::query::<C::Database>(
+                    "INSERT INTO Measurements (channel_id, value, time) VALUES ($1, $2, $3)",
+                )
+                .bind(&channel_id)
+                .bind(p.value)
+                .bind(DateTime::<Local>::from(p.time))
+                .execute(&mut self.client)
+                .await
+                {
+                    errors.push(err);
+                }
+            }
+        }
+        errors
     }
 }

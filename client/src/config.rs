@@ -1,11 +1,20 @@
 use serde::Deserialize;
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 use tokio::fs;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    W1Therm,
+    Dummy,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
-    pub name: String,
+    pub prefix: String,
     pub server: String,
+    pub period: f64,
+    pub providers: HashSet<ProviderKind>,
 }
 
 impl Config {

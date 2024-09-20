@@ -1,2 +1,6 @@
-name = "example"
+prefix = "example"
 server = "http://127.0.0.1:8080"
+
+period = 60 # seconds
+
+providers = ["dummy"]
