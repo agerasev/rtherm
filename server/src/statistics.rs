@@ -37,6 +37,8 @@ impl ChannelHistory {
         }
         points.sort_by_key(|p| p.time);
 
+        self.window.extend(points);
+
         if let Some(last) = self.window.back().copied() {
             let drop_index = if let Some(drop_time) = last.time.checked_sub(Self::MAX_DURATION) {
                 self.window.partition_point(|p| p.time < drop_time)

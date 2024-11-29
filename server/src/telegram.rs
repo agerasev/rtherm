@@ -119,7 +119,7 @@ enum Command {
     Help,
     #[command(description = "show all available channels.")]
     Channels,
-    #[command(description = "subscribe to specific channel.")]
+    #[command(description = "subscribe to a specific channel.")]
     Subscribe { channel: ChannelId },
 }
 
@@ -134,24 +134,29 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: SharedState) -> Res
             bot.send_message(msg.chat.id, state.digest()).await?
         }
         Command::Subscribe { channel } => {
-            let mut state = state.write().await;
-            let chat = state.chats.entry(msg.chat.id).or_default();
-            let entry = chat.subscriptions.entry(channel.clone());
-            let subscribed = matches!(&entry, Entry::Vacant(..));
-            entry.or_default();
-            bot.send_message(
-                msg.chat.id,
-                format!(
-                    "You {} to channel `{}`.",
-                    if subscribed {
-                        "have successfully subscribed"
-                    } else {
-                        "are already subscribed"
-                    },
-                    channel
-                ),
-            )
-            .await?
+            if channel.is_empty() {
+                bot.send_message(msg.chat.id, "Please provide channel name")
+                    .await?
+            } else {
+                let mut state = state.write().await;
+                let chat = state.chats.entry(msg.chat.id).or_default();
+                let entry = chat.subscriptions.entry(channel.clone());
+                let subscribed = matches!(&entry, Entry::Vacant(..));
+                entry.or_default();
+                bot.send_message(
+                    msg.chat.id,
+                    format!(
+                        "You {} to channel `{}`.",
+                        if subscribed {
+                            "have successfully subscribed"
+                        } else {
+                            "are already subscribed"
+                        },
+                        channel
+                    ),
+                )
+                .await?
+            }
         }
     };
 
