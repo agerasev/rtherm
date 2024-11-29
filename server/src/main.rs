@@ -92,7 +92,7 @@ pub async fn serve<R: Recepient + Send + 'static>(
             .app_data(state.clone())
             .route(&prefix("/summary"), web::get().to(summary::<R>))
             .route(&prefix("/provide"), web::post().to(provide::<R>))
-            .service(fs::Files::new(&prefix("/"), "./static"))
+            .service(fs::Files::new(&prefix("/"), "./static").index_file("index.html"))
     })
     .bind((config.host, config.port))?;
     log::info!("Running HTTP server");

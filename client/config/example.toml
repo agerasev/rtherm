@@ -1,5 +1,5 @@
 prefix = "example"
-server = "http://127.0.0.1:8080"
+server = "http://127.0.0.1:4100"
 
 period = 60 # seconds
 

@@ -11,7 +11,7 @@ services:
     volumes:
       - /data/rtherm/server:/srv
     ports:
-      - 8080:8080
+      - 4100:8080
     depends_on:
       - postgres
 
@@ -26,10 +26,10 @@ services:
       - /data/rtherm/postgres:/var/lib/postgresql/data
 
   grafana:
-    image: grafana/grafana-oss:11.2.0
+    image: grafana/grafana-oss:11.3.1
     user: "1000"
     restart: unless-stopped
     volumes:
       - /data/rtherm/grafana:/var/lib/grafana
     ports:
-      - 3000:3000
+      - 4101:3000

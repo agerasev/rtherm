@@ -1,5 +1,5 @@
 FROM debian:12.7
-RUN apt-get update && apt-get install -y libssl3 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y libssl3 ca-certificates && rm -rf /var/lib/apt/lists/*
 # This Dockerfile does not actually build `rtherm-server` binary.
 # Instead pre-build binary should be put in `server/docker/bin/` directory.
 WORKDIR /opt/
