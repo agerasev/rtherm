@@ -2138,7 +2138,6 @@ name = "rtherm-common"
 version = "0.3.0"
 dependencies = [
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2154,6 +2153,7 @@ dependencies = [
  "log",
  "rtherm-common",
  "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "toml",

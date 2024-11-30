@@ -2,6 +2,7 @@ mod config;
 mod db;
 mod recepient;
 mod statistics;
+mod storage;
 #[cfg(feature = "telegram")]
 mod telegram;
 
@@ -17,6 +18,7 @@ use rtherm_common::{ChannelId, ProvideRequest};
 use sqlx::Connection;
 use statistics::ChannelStatistics;
 use std::{collections::HashMap, env, io};
+use storage::{FileStorage, MemStorage};
 use tokio::sync::Mutex;
 
 #[tokio::main]
@@ -56,7 +58,9 @@ async fn main() {
 
     #[cfg(feature = "telegram")]
     if let Some(tg_config) = config.telegram {
-        recepients.push(AnyRecepient::new(telegram::Telegram::new(tg_config).await));
+        recepients.push(AnyRecepient::new(
+            telegram::Telegram::new(tg_config, FileStorage::new("../data/").await.unwrap()).await,
+        ));
         log::info!("Telegram bot started");
     }
 

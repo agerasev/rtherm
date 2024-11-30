@@ -23,7 +23,7 @@ reqwest = { version = "0.11", default-features = false, features = [
     "json",
     "rustls-tls",
 ] }
-serde = { version = "1.0.193", features = ["derive"] }
-toml = "0.8.8"
+serde.workspace = true
+toml.workspace = true
 log.workspace = true
 env_logger.workspace = true

@@ -1,4 +1,9 @@
-use crate::{config::TelegramConfig, recepient::Recepient, statistics::ChannelHistory};
+use crate::{
+    config::TelegramConfig,
+    recepient::Recepient,
+    statistics::ChannelHistory,
+    storage::{Storage, Stored, StoredLock},
+};
 use frankenstein::{
     AllowedUpdate, AsyncApi, AsyncTelegramApi, GetUpdatesParams, Message, ParseMode,
     SendMessageParams, UpdateContent,
@@ -13,7 +18,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{sync::RwLock, task::spawn, time::sleep};
+use tokio::{task::spawn, time::sleep};
 
 type ChatId = i64;
 
@@ -79,7 +84,7 @@ impl Default for ChannelSettings {
     }
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
 struct ChannelSubscription {
     settings: ChannelSettings,
     is_bad: bool,
@@ -91,19 +96,20 @@ struct ChannelState {
     last_update: Option<Instant>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 struct Chat {
     subscriptions: HashMap<ChannelId, ChannelSubscription>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 struct State {
     settings: CommonSettings,
-    channels: HashMap<ChannelId, ChannelState>,
     chats: HashMap<ChatId, Chat>,
+    #[serde(skip)]
+    channels: HashMap<ChannelId, ChannelState>,
 }
 
-type SharedState = Arc<RwLock<State>>;
+type SharedState<S> = Arc<StoredLock<State, S>>;
 
 impl ChannelState {
     fn digest(&self) -> String {
@@ -190,10 +196,18 @@ impl FromStr for Command {
     }
 }
 
-#[derive(Clone)]
-pub struct Telegram {
+pub struct Telegram<S: Storage> {
     api: AsyncApi,
-    state: SharedState,
+    state: SharedState<S>,
+}
+
+impl<S: Storage> Clone for Telegram<S> {
+    fn clone(&self) -> Self {
+        Self {
+            api: self.api.clone(),
+            state: self.state.clone(),
+        }
+    }
 }
 
 type Error = <AsyncApi as AsyncTelegramApi>::Error;
@@ -210,11 +224,13 @@ async fn send_message(api: &AsyncApi, chat: ChatId, text: impl Into<String>) -> 
     Ok(())
 }
 
-impl Telegram {
-    pub async fn new(config: TelegramConfig) -> Self {
+impl<S: Storage + Sync + Send + 'static> Telegram<S> {
+    pub async fn new(config: TelegramConfig, storage: S) -> Self {
+        let state =
+            Stored::<State, S>::load_or_default("telegram-state".to_string(), storage).await;
         let this = Self {
             api: AsyncApi::new(&config.token),
-            state: SharedState::default(),
+            state: Arc::new(StoredLock::new(state)),
         };
         spawn(this.clone().poll());
         spawn(this.clone().monitor());
@@ -284,11 +300,15 @@ impl Telegram {
             }
             Command::Subscribe { channel } => {
                 if let Some(channel) = channel {
-                    let mut state = self.state.write().await;
-                    let chat = state.chats.entry(chat_id).or_default();
-                    let entry = chat.subscriptions.entry(channel.clone());
-                    let done = matches!(&entry, Entry::Vacant(..));
-                    entry.or_default();
+                    let done;
+                    {
+                        let mut state = self.state.write().await;
+                        let chat = state.chats.entry(chat_id).or_default();
+                        let entry = chat.subscriptions.entry(channel.clone());
+                        done = matches!(&entry, Entry::Vacant(..));
+                        entry.or_default();
+                        state.async_drop().await;
+                    }
                     send_message(
                         &self.api,
                         chat_id,
@@ -322,9 +342,13 @@ impl Telegram {
             }
             Command::Unsubscribe { channel } => {
                 if let Some(channel) = channel {
-                    let mut state = self.state.write().await;
-                    let chat = state.chats.entry(chat_id).or_default();
-                    let done = chat.subscriptions.remove(&channel).is_some();
+                    let done;
+                    {
+                        let mut state = self.state.write().await;
+                        let chat = state.chats.entry(chat_id).or_default();
+                        done = chat.subscriptions.remove(&channel).is_some();
+                        state.async_drop().await;
+                    }
                     send_message(
                         &self.api,
                         chat_id,
@@ -404,7 +428,7 @@ impl Telegram {
     }
 }
 
-impl Recepient for Telegram {
+impl<S: Storage + Sync + Send + 'static> Recepient for Telegram<S> {
     type Error = Error;
 
     async fn update(&mut self, measurements: Measurements) -> Vec<Error> {
@@ -479,6 +503,8 @@ impl Recepient for Telegram {
                     }
                 }
             }
+
+            state.async_drop().await
         }
 
         let mut errors = Vec::new();
