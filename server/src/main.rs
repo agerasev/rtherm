@@ -14,12 +14,33 @@ use self::{
 };
 use actix_files as fs;
 use actix_web::{web, App, HttpServer, Responder, Result};
+use config::StorageType;
+use db::DbStorage;
 use rtherm_common::{ChannelId, ProvideRequest};
 use sqlx::Connection;
 use statistics::ChannelStatistics;
 use std::{collections::HashMap, env, io};
-use storage::{FileStorage, MemStorage};
+use storage::{AnyStorage, FileStorage, MemStorage};
 use tokio::sync::Mutex;
+
+#[cfg(feature = "postgres")]
+async fn postgres_connection(
+    config: &self::config::PostgresConfig,
+) -> sqlx::postgres::PgConnection {
+    sqlx::postgres::PgConnection::connect(&format!(
+        "postgres://{}:{}@{}/rtherm",
+        config.user, config.password, config.host
+    ))
+    .await
+    .unwrap()
+}
+
+#[cfg(feature = "sqlite")]
+async fn sqlite_connection(config: &self::config::SqliteConfig) -> sqlx::sqlite::SqliteConnection {
+    sqlx::sqlite::SqliteConnection::connect(&config.path)
+        .await
+        .unwrap()
+}
 
 #[tokio::main]
 async fn main() {
@@ -37,29 +58,58 @@ async fn main() {
 
     #[cfg(feature = "postgres")]
     if let Some(db_config) = config.db.as_ref().and_then(|db| db.postgres.as_ref()) {
-        let conn = sqlx::postgres::PgConnection::connect(&format!(
-            "postgres://{}:{}@{}/rtherm",
-            db_config.user, db_config.password, db_config.host
-        ))
-        .await
-        .unwrap();
+        let conn = postgres_connection(&db_config).await;
         recepients.push(AnyRecepient::new(Db::new(conn).await.unwrap()));
         log::info!("Postgres database connected");
     }
 
     #[cfg(feature = "sqlite")]
     if let Some(db_config) = config.db.as_ref().and_then(|db| db.sqlite.as_ref()) {
-        let conn = sqlx::sqlite::SqliteConnection::connect(&db_config.path)
-            .await
-            .unwrap();
+        let conn = sqlite_connection(db_config).await;
         recepients.push(AnyRecepient::new(Db::new(conn).await.unwrap()));
         log::info!("SQLite database connected");
     }
 
+    let storage: AnyStorage = match config.storage.type_ {
+        StorageType::Mem => AnyStorage::new(MemStorage::default()),
+        StorageType::Fs => AnyStorage::new(
+            FileStorage::new(
+                config
+                    .storage
+                    .path
+                    .expect(r#"Storage type is set to "fs" but path is not provided"#),
+            )
+            .await
+            .unwrap(),
+        ),
+        StorageType::Db => {
+            let mut db_storage = None;
+
+            #[cfg(feature = "postgres")]
+            if let Some(db_config) = config.db.as_ref().and_then(|db| db.postgres.as_ref()) {
+                db_storage = Some(AnyStorage::new(
+                    DbStorage::new(postgres_connection(&db_config).await)
+                        .await
+                        .unwrap(),
+                ));
+            }
+            #[cfg(feature = "sqlite")]
+            if let Some(db_config) = config.db.as_ref().and_then(|db| db.sqlite.as_ref()) {
+                db_storage = Some(AnyStorage::new(
+                    DbStorage::new(sqlite_connection(db_config).await)
+                        .await
+                        .unwrap(),
+                ));
+            }
+
+            db_storage.expect(r#"Storage type is set to "db" but no databases found"#)
+        }
+    };
+
     #[cfg(feature = "telegram")]
     if let Some(tg_config) = config.telegram {
         recepients.push(AnyRecepient::new(
-            telegram::Telegram::new(tg_config, FileStorage::new("../data/").await.unwrap()).await,
+            telegram::Telegram::new(tg_config, storage).await,
         ));
         log::info!("Telegram bot started");
     }

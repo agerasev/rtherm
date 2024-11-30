@@ -8,3 +8,6 @@ path = "../data/database.db"
 
 # [telegram]
 # token = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
+
+[storage]
+type = "db"

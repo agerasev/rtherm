@@ -35,11 +35,29 @@ pub struct TelegramConfig {
     pub token: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageType {
+    #[default]
+    Mem,
+    Fs,
+    Db,
+}
+
+#[derive(Clone, Default, Debug, Deserialize)]
+pub struct StorageConfig {
+    #[serde(rename = "type")]
+    pub type_: StorageType,
+    pub path: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub http: HttpConfig,
     pub db: Option<DbConfig>,
     pub telegram: Option<TelegramConfig>,
+    #[serde(default)]
+    pub storage: StorageConfig,
 }
 
 impl Config {
