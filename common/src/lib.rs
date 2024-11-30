@@ -5,6 +5,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     error::Error,
     fmt::{self, Display},
+    hash::Hash,
     ops::Deref,
     time::SystemTime,
 };
@@ -78,9 +79,11 @@ impl Display for InvalidFormat {
 }
 impl Error for InvalidFormat {}
 
-pub type Measurements = HashMap<ChannelId, Vec<Point>>;
+pub type Measurements<K = ChannelId> = HashMap<K, Vec<Point>>;
 
-pub fn merge_groups(groups: impl IntoIterator<Item = Measurements>) -> Measurements {
+pub fn merge_groups<K: Eq + Hash>(
+    groups: impl IntoIterator<Item = Measurements<K>>,
+) -> Measurements<K> {
     let mut accum = HashMap::new();
     for group in groups {
         for (channel, measurements) in group {

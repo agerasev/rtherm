@@ -1,5 +1,5 @@
 use crate::provider::Provider;
-use rtherm_common::{ChannelId, Measurements, Point};
+use rtherm_common::{Measurements, Point};
 use std::{collections::HashMap, io, time::SystemTime};
 use tokio::fs;
 
@@ -9,7 +9,7 @@ pub struct W1Therm;
 
 impl Provider for W1Therm {
     type Error = io::Error;
-    async fn measure(&mut self) -> (Measurements, Vec<Self::Error>) {
+    async fn measure(&mut self) -> (Measurements<String>, Vec<Self::Error>) {
         let mut entries = match fs::read_dir(W1_DIR).await {
             Ok(xs) => xs,
             Err(err) => return (Measurements::default(), vec![err]),
@@ -26,17 +26,10 @@ impl Provider for W1Therm {
                 }
             };
 
-            let name = entry.file_name().to_string_lossy().replace(['-'], "");
+            let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("w1_bus_master") {
                 continue;
             }
-            let name = match ChannelId::try_from(name) {
-                Ok(name) => name,
-                Err(err) => {
-                    errors.push(io::Error::new(io::ErrorKind::InvalidData, err));
-                    continue;
-                }
-            };
             let bytes = match fs::read(entry.path().join("temperature")).await {
                 Ok(bytes) => bytes,
                 Err(err) => {

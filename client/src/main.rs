@@ -11,7 +11,12 @@ use config::ProviderKind;
 use provider::{AnyProvider, Provider};
 use reqwest::Client;
 use rtherm_common::{merge_groups, ChannelId, ProvideRequest};
-use std::{env, mem, ops::Deref, time::Duration};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    env, mem,
+    ops::Deref,
+    time::Duration,
+};
 use storage::{MemStorage, Storage, StorageGuard};
 use tokio::{sync::mpsc::unbounded_channel as channel, time::sleep};
 
@@ -22,6 +27,7 @@ async fn main() -> ! {
         Config::read(path).await.expect("Error reading config")
     };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
+    log::info!("Config: {:?}", config);
 
     let mut providers = Vec::<AnyProvider>::new();
     #[cfg(feature = "w1_therm")]
@@ -62,17 +68,33 @@ async fn main() -> ! {
         if consumer.recv_many(&mut meas_buffer, usize::MAX).await == 0 {
             panic!("Producer is closed");
         }
-        let mut meas = merge_groups(mem::take(&mut meas_buffer));
+        let raw_meas = merge_groups(mem::take(&mut meas_buffer));
+        log::debug!("Measured: {:?}", raw_meas);
+        let mut meas = HashMap::new();
         if !config.prefix.is_empty() {
-            meas = meas
-                .into_iter()
-                .map(|(chan_id, values)| {
-                    (
-                        ChannelId::try_from(format!("{}{}", config.prefix, chan_id)).unwrap(),
-                        values,
-                    )
-                })
-                .collect();
+            for (chan_id, values) in raw_meas {
+                let id = match ChannelId::try_from(format!(
+                    "{}{}",
+                    config.prefix,
+                    match config.name_map.get(&chan_id) {
+                        Some(name) => name.to_string(),
+                        None => str_to_id_lossy(&chan_id),
+                    }
+                )) {
+                    Ok(id) => id,
+                    Err(err) => {
+                        log::error!("Bad channel name: {}", err);
+                        continue;
+                    }
+                };
+                match meas.entry(id) {
+                    Entry::Vacant(e) => e.insert(values),
+                    Entry::Occupied(e) => {
+                        log::error!("Key collision: {}", e.key());
+                        continue;
+                    }
+                };
+            }
         }
 
         let stored = match storage.store(meas.clone()).await {
@@ -122,4 +144,8 @@ async fn main() -> ! {
             }
         }
     }
+}
+
+fn str_to_id_lossy(s: &str) -> String {
+    s.replace('-', "")
 }

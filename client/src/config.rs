@@ -1,5 +1,9 @@
+use rtherm_common::ChannelId;
 use serde::Deserialize;
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 use tokio::fs;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Deserialize)]
@@ -15,6 +19,7 @@ pub struct Config {
     pub server: String,
     pub period: f64,
     pub providers: HashSet<ProviderKind>,
+    pub name_map: HashMap<String, ChannelId>,
 }
 
 impl Config {
