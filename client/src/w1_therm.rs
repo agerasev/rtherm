@@ -1,5 +1,5 @@
 use crate::provider::Provider;
-use rtherm_common::{Measurements, Point};
+use rtherm_common::{ChannelId, Measurements, Point};
 use std::{collections::HashMap, io, time::SystemTime};
 use tokio::fs;
 
@@ -26,10 +26,17 @@ impl Provider for W1Therm {
                 }
             };
 
-            let name = entry.file_name().to_string_lossy().to_string();
+            let name = entry.file_name().to_string_lossy().replace(['-'], "");
             if name.starts_with("w1_bus_master") {
                 continue;
             }
+            let name = match ChannelId::try_from(name) {
+                Ok(name) => name,
+                Err(err) => {
+                    errors.push(io::Error::new(io::ErrorKind::InvalidData, err));
+                    continue;
+                }
+            };
             let bytes = match fs::read(entry.path().join("temperature")).await {
                 Ok(bytes) => bytes,
                 Err(err) => {

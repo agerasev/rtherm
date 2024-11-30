@@ -42,7 +42,7 @@ where
                 if let Err(err) = sqlx::query::<C::Database>(
                     "INSERT INTO Measurements (channel_id, value, time) VALUES ($1, $2, $3)",
                 )
-                .bind(&channel_id)
+                .bind(channel_id.to_string())
                 .bind(p.value)
                 .bind(DateTime::<Local>::from(p.time))
                 .execute(&mut self.client)

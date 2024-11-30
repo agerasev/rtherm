@@ -3,11 +3,13 @@ members = ["common", "client", "server"]
 resolver = "2"
 
 [workspace.package]
+version = "0.3.0"
 authors = ["Alexey Gerasev <alexey.gerasev@gmail.com>"]
 homepage = "https://gitlab.com/agerasev/rtherm"
 repository = "https://gitlab.com/agerasev/rtherm.git"
 license = "MIT"
 readme = "README.md"
+edition = "2021"
 
 [workspace.dependencies]
 rtherm-common = { path = "common" }

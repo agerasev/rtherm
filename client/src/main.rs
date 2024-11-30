@@ -10,7 +10,7 @@ use crate::config::Config;
 use config::ProviderKind;
 use provider::{AnyProvider, Provider};
 use reqwest::Client;
-use rtherm_common::{merge_groups, ProvideRequest};
+use rtherm_common::{merge_groups, ChannelId, ProvideRequest};
 use std::{env, mem, ops::Deref, time::Duration};
 use storage::{MemStorage, Storage, StorageGuard};
 use tokio::{sync::mpsc::unbounded_channel as channel, time::sleep};
@@ -66,7 +66,12 @@ async fn main() -> ! {
         if !config.prefix.is_empty() {
             meas = meas
                 .into_iter()
-                .map(|(chan_id, values)| (format!("{}.{}", config.prefix, chan_id), values))
+                .map(|(chan_id, values)| {
+                    (
+                        ChannelId::try_from(format!("{}{}", config.prefix, chan_id)).unwrap(),
+                        values,
+                    )
+                })
                 .collect();
         }
 

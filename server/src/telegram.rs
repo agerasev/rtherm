@@ -57,7 +57,7 @@ impl RangeExt for RangeInclusive<f64> {
 impl Default for CommonSettings {
     fn default() -> Self {
         Self {
-            offline_timeout: Duration::from_secs(60),
+            offline_timeout: Duration::from_secs(2 * 60),
             hysteresis: 5.0,
         }
     }
@@ -161,16 +161,25 @@ impl FromStr for Command {
         if !cmd.starts_with('/') {
             return Err("Command must start with '/'".into());
         }
+        let make_opt_chid = |s: Option<&str>| -> Result<Option<ChannelId>, String> {
+            if let Some(s) = s {
+                ChannelId::try_from(s)
+                    .map_err(|e| e.to_string())
+                    .map(|s| Some(s))
+            } else {
+                Ok(None)
+            }
+        };
         let ret = match &cmd[1..] {
             "start" | "help" => Self::Help,
             "digest" => Self::Digest {
-                channel: args.next().map(String::from),
+                channel: make_opt_chid(args.next())?,
             },
             "subscribe" => Self::Subscribe {
-                channel: args.next().map(String::from),
+                channel: make_opt_chid(args.next())?,
             },
             "unsubscribe" => Self::Unsubscribe {
-                channel: args.next().map(String::from),
+                channel: make_opt_chid(args.next())?,
             },
             other => return Err(format!("Unknown command: {other}")),
         };

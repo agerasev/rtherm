@@ -1,9 +1,9 @@
 use crate::provider::Provider;
-use rtherm_common::{Measurements, Point};
+use rtherm_common::{ChannelId, Measurements, Point};
 use std::{collections::HashMap, convert::Infallible, f64::consts::PI, time::SystemTime};
 
 pub struct Dummy {
-    pub name: String,
+    pub name: ChannelId,
     pub offset: f64,
     pub mag: f64,
     pub period: f64,
@@ -13,7 +13,7 @@ pub struct Dummy {
 impl Default for Dummy {
     fn default() -> Self {
         Self {
-            name: "dummy".to_string(),
+            name: ChannelId::try_from("dummy").unwrap(),
             offset: 40.0,
             mag: 20.0,
             period: 600.0,
