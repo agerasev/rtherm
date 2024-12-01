@@ -27,12 +27,26 @@ use tokio::sync::Mutex;
 async fn postgres_connection(
     config: &self::config::PostgresConfig,
 ) -> sqlx::postgres::PgConnection {
-    sqlx::postgres::PgConnection::connect(&format!(
-        "postgres://{}:{}@{}/rtherm",
-        config.user, config.password, config.host
-    ))
-    .await
-    .unwrap()
+    loop {
+        let res = sqlx::postgres::PgConnection::connect(&format!(
+            "postgres://{}:{}@{}/rtherm",
+            config.user, config.password, config.host
+        ))
+        .await;
+        match res {
+            Ok(conn) => break conn,
+            Err(e) => {
+                if let sqlx::Error::Database(e) = &e {
+                    if e.code().as_deref() == Some("57P03") {
+                        log::info!("Waiting for database to start ...");
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                }
+                panic!("{e}")
+            }
+        }
+    }
 }
 
 #[cfg(feature = "sqlite")]

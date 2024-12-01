@@ -96,22 +96,24 @@ where
 {
     type Error = sqlx::Error;
     async fn load(&mut self, name: String) -> Result<Option<Vec<u8>>, Self::Error> {
-        let rows = sqlx::query::<C::Database>("SELECT (name, value) FROM Storage WHERE name = $1")
+        let rows = sqlx::query::<C::Database>("SELECT (value) FROM Storage WHERE name = $1")
             .bind(name)
             .fetch_all(&mut self.client)
             .await?;
         assert!(rows.len() < 2);
         match rows.get(0) {
-            Some(row) => Ok(Some(row.try_get(1)?)),
+            Some(row) => Ok(Some(row.try_get(0)?)),
             None => Ok(None),
         }
     }
     async fn store(&mut self, name: String, value: Vec<u8>) -> Result<(), Self::Error> {
-        sqlx::query::<C::Database>("INSERT INTO Storage (name, value) VALUES ($1, $2)")
-            .bind(name)
-            .bind(value)
-            .execute(&mut self.client)
-            .await?;
+        sqlx::query::<C::Database>(
+            "INSERT INTO Storage (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2",
+        )
+        .bind(name)
+        .bind(value)
+        .execute(&mut self.client)
+        .await?;
         Ok(())
     }
 }
