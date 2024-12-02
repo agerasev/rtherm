@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     environment:
       - RTHERM_CONFIG=docker.toml
-      - RUST_LOG=debug
+      - RUST_LOG=info
     volumes:
       - /data/rtherm/server:/srv
     ports:
@@ -29,6 +29,9 @@ services:
     image: grafana/grafana-oss:11.3.1
     user: "1000"
     restart: unless-stopped
+    environment:
+      - GF_SERVER_ROOT_URL=/rtherm/grafana
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
     volumes:
       - /data/rtherm/grafana:/var/lib/grafana
     ports:
