@@ -8,8 +8,6 @@ use tokio::fs;
 pub struct HttpConfig {
     pub host: String,
     pub port: u16,
-    #[serde(default)]
-    pub prefix: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

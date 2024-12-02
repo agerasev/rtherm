@@ -38,7 +38,7 @@ const subscribe = () => {
         console.error("Get error:", e);
         setTimeout(subscribe, TIMEOUT);
     };
-    xhttp.open("GET", "../summary", true);
+    xhttp.open("GET", "summary", true);
     xhttp.send();
 }
 

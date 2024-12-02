@@ -150,7 +150,6 @@ pub async fn serve<R: Recepient + Send + 'static>(
     config: HttpConfig,
     recepient: R,
 ) -> io::Result<()> {
-    let prefix = move |path: &str| format!("{}{}", config.prefix, path);
     let state = web::Data::new(Mutex::new(State {
         info: Statistics::default(),
         recepient,
@@ -158,9 +157,9 @@ pub async fn serve<R: Recepient + Send + 'static>(
     let server = HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
-            .route(&prefix("/summary"), web::get().to(summary::<R>))
-            .route(&prefix("/provide"), web::post().to(provide::<R>))
-            .service(fs::Files::new(&prefix("/"), "./static").index_file("index.html"))
+            .route("/summary", web::get().to(summary::<R>))
+            .route("/provide", web::post().to(provide::<R>))
+            .service(fs::Files::new("/", "./static").index_file("index.html"))
     })
     .bind((config.host, config.port))?;
     log::info!("Running HTTP server");
