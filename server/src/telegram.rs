@@ -8,7 +8,7 @@ use frankenstein::{
     AllowedUpdate, AsyncApi, AsyncTelegramApi, GetUpdatesParams, Message, ParseMode,
     SendMessageParams, UpdateContent,
 };
-use rtherm_common::{ChannelId, Measurements};
+use rtherm_common::{ChannelId, Measurements, Point};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
@@ -18,7 +18,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{task::spawn, time::sleep};
+use tokio::{sync::RwLock, task::spawn, time::sleep};
 
 type ChatId = i64;
 
@@ -94,24 +94,47 @@ struct ChannelSubscription {
 struct ChannelState {
     values: ChannelHistory,
     last_update: Option<Instant>,
+    online: bool,
 }
 
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
 struct Chat {
     subscriptions: HashMap<ChannelId, ChannelSubscription>,
 }
 
-#[derive(Default, Debug, Serialize, Deserialize)]
-struct State {
-    settings: CommonSettings,
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+struct Settings {
+    common: CommonSettings,
     chats: HashMap<ChatId, Chat>,
-    #[serde(skip)]
+}
+
+#[derive(Default, Debug)]
+struct State {
     channels: HashMap<ChannelId, ChannelState>,
 }
 
-type SharedState<S> = Arc<StoredLock<State, S>>;
+type SharedSettings<S> = Arc<StoredLock<Settings, S>>;
+type SharedState = Arc<RwLock<State>>;
 
 impl ChannelState {
+    fn update(&mut self, points: impl IntoIterator<Item = Point>) -> bool {
+        self.values.update(points);
+        let becomes_online = !self.online;
+        self.online = true;
+        self.last_update = Some(Instant::now());
+        becomes_online
+    }
+    fn becomes_offline(&mut self, offline_timeout: Duration) -> bool {
+        let mut becomes_offline = false;
+        if let Some(last_update) = self.last_update {
+            if last_update + offline_timeout < Instant::now() && self.online {
+                self.online = false;
+                becomes_offline = true;
+            }
+        }
+        becomes_offline
+    }
+
     fn digest(&self) -> String {
         self.values.statistics().to_string()
     }
@@ -198,13 +221,15 @@ impl FromStr for Command {
 
 pub struct Telegram<S: Storage> {
     api: AsyncApi,
-    state: SharedState<S>,
+    settings: SharedSettings<S>,
+    state: SharedState,
 }
 
 impl<S: Storage> Clone for Telegram<S> {
     fn clone(&self) -> Self {
         Self {
             api: self.api.clone(),
+            settings: self.settings.clone(),
             state: self.state.clone(),
         }
     }
@@ -226,11 +251,11 @@ async fn send_message(api: &AsyncApi, chat: ChatId, text: impl Into<String>) -> 
 
 impl<S: Storage + Sync + Send + 'static> Telegram<S> {
     pub async fn new(config: TelegramConfig, storage: S) -> Self {
-        let state =
-            Stored::<State, S>::load_or_default("telegram-state".to_string(), storage).await;
+        let settings = Stored::load_or_default("telegram-state".to_string(), storage).await;
         let this = Self {
             api: AsyncApi::new(&config.token),
-            state: Arc::new(StoredLock::new(state)),
+            settings: Arc::new(StoredLock::new(settings)),
+            state: SharedState::default(),
         };
         spawn(this.clone().poll());
         spawn(this.clone().monitor());
@@ -302,12 +327,12 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
                 if let Some(channel) = channel {
                     let done;
                     {
-                        let mut state = self.state.write().await;
-                        let chat = state.chats.entry(chat_id).or_default();
+                        let mut settings = self.settings.write().await;
+                        let chat = settings.chats.entry(chat_id).or_default();
                         let entry = chat.subscriptions.entry(channel.clone());
                         done = matches!(&entry, Entry::Vacant(..));
                         entry.or_default();
-                        state.async_drop().await;
+                        settings.async_drop().await;
                     }
                     send_message(
                         &self.api,
@@ -344,10 +369,10 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
                 if let Some(channel) = channel {
                     let done;
                     {
-                        let mut state = self.state.write().await;
-                        let chat = state.chats.entry(chat_id).or_default();
+                        let mut settings = self.settings.write().await;
+                        let chat = settings.chats.entry(chat_id).or_default();
                         done = chat.subscriptions.remove(&channel).is_some();
-                        state.async_drop().await;
+                        settings.async_drop().await;
                     }
                     send_message(
                         &self.api,
@@ -364,8 +389,8 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
                     )
                     .await?
                 } else {
-                    let state = self.state.read().await;
-                    let channels = match state.chats.get(&chat_id) {
+                    let settings = self.settings.read().await;
+                    let channels = match settings.chats.get(&chat_id) {
                         Some(chat) => chat.subscriptions.keys().collect::<Vec<_>>(),
                         None => Vec::new(),
                     };
@@ -392,7 +417,7 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
     }
 
     async fn monitor(self) -> ! {
-        let settings = self.state.read().await.settings.clone();
+        let settings = self.settings.read().await.common.clone();
 
         loop {
             sleep(settings.offline_timeout / 2).await;
@@ -400,20 +425,20 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
             let mut messages = Vec::<(ChatId, String)>::new();
 
             {
-                let state = self.state.read().await;
-                let now = Instant::now();
-                for (channel_id, channel) in state.channels.iter() {
-                    if let Some(last_update) = channel.last_update {
-                        if last_update + settings.offline_timeout > now {
-                            continue;
-                        }
-                    }
-                    for (&chat_id, chat) in state.chats.iter() {
-                        if chat.subscriptions.contains_key(channel_id) {
-                            messages.push((
-                                chat_id,
-                                format!("<b>Alert!</b>\n<code>{}</code> is offline", channel_id),
-                            ));
+                let mut state = self.state.write().await;
+                for (channel_id, channel) in state.channels.iter_mut() {
+                    if channel.becomes_offline(settings.offline_timeout) {
+                        let chats = self.settings.read().await.chats.clone();
+                        for (chat_id, chat) in chats.into_iter() {
+                            if chat.subscriptions.contains_key(channel_id) {
+                                messages.push((
+                                    chat_id,
+                                    format!(
+                                        "<b>Alert!</b>\n<code>{}</code> is offline",
+                                        channel_id
+                                    ),
+                                ));
+                            }
                         }
                     }
                 }
@@ -432,13 +457,12 @@ impl<S: Storage + Sync + Send + 'static> Recepient for Telegram<S> {
     type Error = Error;
 
     async fn update(&mut self, measurements: Measurements) -> Vec<Error> {
-        let Self { api, state, .. } = self;
         let mut messages = Vec::<(ChatId, String)>::new();
 
         {
-            let mut state = state.write().await;
-            let settings = state.settings.clone();
-            let now = Instant::now();
+            let mut state = self.state.write().await;
+            let mut settings = self.settings.write().await;
+            let common_settings = settings.common.clone();
 
             for (channel_id, points) in measurements {
                 if points.is_empty() {
@@ -450,17 +474,13 @@ impl<S: Storage + Sync + Send + 'static> Recepient for Telegram<S> {
                     .fold(f64::INFINITY..=f64::NEG_INFINITY, |range, value| {
                         range.start().min(value)..=range.end().max(value)
                     });
-                let channel = state.channels.entry(channel_id.clone()).or_default();
-                channel.values.update(points);
-                let become_online = match channel.last_update {
-                    Some(last_update) => last_update + settings.offline_timeout < now,
-                    None => true,
-                };
-                channel.last_update = Some(now);
 
-                for (&chat_id, chat) in state.chats.iter_mut() {
+                let channel = state.channels.entry(channel_id.clone()).or_default();
+                let becomes_online = channel.update(points);
+
+                for (&chat_id, chat) in settings.chats.iter_mut() {
                     if let Some(sub) = chat.subscriptions.get_mut(&channel_id) {
-                        if become_online {
+                        if becomes_online {
                             messages.push((
                                 chat_id,
                                 format!(
@@ -486,7 +506,7 @@ impl<S: Storage + Sync + Send + 'static> Recepient for Telegram<S> {
                         } else if sub
                             .settings
                             .normal_range
-                            .widen(-settings.hysteresis)
+                            .widen(-common_settings.hysteresis)
                             .contains_range(&value_range)
                         {
                             sub.is_bad = false;
@@ -504,12 +524,12 @@ impl<S: Storage + Sync + Send + 'static> Recepient for Telegram<S> {
                 }
             }
 
-            state.async_drop().await
+            settings.async_drop().await
         }
 
         let mut errors = Vec::new();
         for (chat_id, message) in messages {
-            if let Err(err) = send_message(&api, chat_id, message).await {
+            if let Err(err) = send_message(&self.api, chat_id, message).await {
                 errors.push(err);
             }
         }
