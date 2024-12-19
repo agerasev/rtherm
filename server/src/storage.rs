@@ -16,13 +16,13 @@ use tokio::{
     sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
+type StorageReadResult<E> = Result<Option<Vec<u8>>, E>;
+
 /// Persistent storage
 pub trait Storage {
     type Error: Display;
-    fn load(
-        &mut self,
-        name: String,
-    ) -> impl Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send;
+    fn load(&mut self, name: String)
+        -> impl Future<Output = StorageReadResult<Self::Error>> + Send;
     fn store(
         &mut self,
         name: String,
@@ -38,7 +38,7 @@ pub struct MemStorage(HashMap<String, Vec<u8>>);
 
 impl Storage for MemStorage {
     type Error = Infallible;
-    async fn load(&mut self, name: String) -> Result<Option<Vec<u8>>, Self::Error> {
+    async fn load(&mut self, name: String) -> StorageReadResult<Self::Error> {
         Ok(self.0.get(&name).map(|v| v.to_owned()))
     }
     async fn store(&mut self, name: String, value: Vec<u8>) -> Result<(), Self::Error> {
@@ -68,7 +68,7 @@ impl FileStorage {
 
 impl Storage for FileStorage {
     type Error = io::Error;
-    async fn load(&mut self, name: String) -> Result<Option<Vec<u8>>, Self::Error> {
+    async fn load(&mut self, name: String) -> StorageReadResult<Self::Error> {
         let mut file = match File::open(self.dir.join(name)).await {
             Ok(f) => f,
             Err(e) => match e.kind() {
@@ -91,7 +91,7 @@ trait DynStorage: Send + Sync + 'static {
     fn load_dyn(
         &mut self,
         name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<u8>>, AnyError>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = StorageReadResult<AnyError>> + Send + '_>>;
 
     fn store_dyn(
         &mut self,
@@ -104,7 +104,7 @@ impl<S: Storage<Error: Send + 'static> + Send + Sync + 'static> DynStorage for S
     fn load_dyn(
         &mut self,
         name: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<u8>>, AnyError>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = StorageReadResult<AnyError>> + Send + '_>> {
         Box::pin(
             self.load(name)
                 .map(|r| r.map_err(|e| Box::new(e) as AnyError)),
@@ -132,7 +132,7 @@ impl AnyStorage {
 
 impl Storage for AnyStorage {
     type Error = AnyError;
-    async fn load(&mut self, name: String) -> Result<Option<Vec<u8>>, Self::Error> {
+    async fn load(&mut self, name: String) -> StorageReadResult<Self::Error> {
         self.0.load_dyn(name).await
     }
     async fn store(&mut self, name: String, value: Vec<u8>) -> Result<(), Self::Error> {
@@ -211,25 +211,23 @@ pub struct StoredLockWriteGuard<'a, T: Serialize + for<'de> Deserialize<'de>, S:
     dumped: bool,
 }
 
-impl<'a, T: Serialize + for<'de> Deserialize<'de>, S: Storage> Deref
-    for StoredLockWriteGuard<'a, T, S>
+impl<T: Serialize + for<'de> Deserialize<'de>, S: Storage> Deref
+    for StoredLockWriteGuard<'_, T, S>
 {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.inner.value
     }
 }
-impl<'a, T: Serialize + for<'de> Deserialize<'de>, S: Storage> DerefMut
-    for StoredLockWriteGuard<'a, T, S>
+impl<T: Serialize + for<'de> Deserialize<'de>, S: Storage> DerefMut
+    for StoredLockWriteGuard<'_, T, S>
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner.value
     }
 }
 
-impl<'a, T: Serialize + for<'de> Deserialize<'de>, S: Storage> Drop
-    for StoredLockWriteGuard<'a, T, S>
-{
+impl<T: Serialize + for<'de> Deserialize<'de>, S: Storage> Drop for StoredLockWriteGuard<'_, T, S> {
     fn drop(&mut self) {
         if !self.dumped {
             log::warn!("StoredLockWriteGuard should be dropped with async_drop");
@@ -237,7 +235,7 @@ impl<'a, T: Serialize + for<'de> Deserialize<'de>, S: Storage> Drop
         }
     }
 }
-impl<'a, T: Serialize + for<'de> Deserialize<'de>, S: Storage> StoredLockWriteGuard<'a, T, S> {
+impl<T: Serialize + for<'de> Deserialize<'de>, S: Storage> StoredLockWriteGuard<'_, T, S> {
     pub async fn async_drop(mut self) {
         self.inner.dump().await;
         self.dumped = true;

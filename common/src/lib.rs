@@ -47,11 +47,8 @@ impl Deref for ChannelId {
 impl TryFrom<String> for ChannelId {
     type Error = InvalidFormat;
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.chars().all(|c| {
-            ('0'..='9').contains(&c)
-                || ('A'..='Z').contains(&c)
-                || ('a'..='z').contains(&c)
-                || '_' == c
+        if value.chars().all(|c: char| {
+            c.is_ascii_digit() || c.is_ascii_uppercase() || c.is_ascii_lowercase() || c == '_'
         }) {
             Ok(Self(value))
         } else {

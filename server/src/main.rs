@@ -72,7 +72,7 @@ async fn main() {
 
     #[cfg(feature = "postgres")]
     if let Some(db_config) = config.db.as_ref().and_then(|db| db.postgres.as_ref()) {
-        let conn = postgres_connection(&db_config).await;
+        let conn = postgres_connection(db_config).await;
         recepients.push(AnyRecepient::new(Db::new(conn).await.unwrap()));
         log::info!("Postgres database connected");
     }
@@ -102,7 +102,7 @@ async fn main() {
             #[cfg(feature = "postgres")]
             if let Some(db_config) = config.db.as_ref().and_then(|db| db.postgres.as_ref()) {
                 db_storage = Some(AnyStorage::new(
-                    DbStorage::new(postgres_connection(&db_config).await)
+                    DbStorage::new(postgres_connection(db_config).await)
                         .await
                         .unwrap(),
                 ));

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::{hash_map::Entry, HashMap},
+    fmt::Write,
     ops::RangeInclusive,
     str::FromStr,
     sync::Arc,
@@ -142,7 +143,7 @@ impl ChannelState {
         if let Some(point) = self.values.statistics().last {
             return format!("{:.1} °C", point.value);
         }
-        return "offline".into();
+        "offline".into()
     }
 }
 
@@ -151,8 +152,10 @@ impl State {
         if !self.channels.is_empty() {
             self.channels
                 .iter()
-                .map(|(id, channel)| format!("/digest_{id}: {}\n", channel.last_value_text()))
-                .collect()
+                .fold(String::new(), |mut accum, (id, channel)| {
+                    writeln!(&mut accum, "/digest_{id}: {}", channel.last_value_text()).unwrap();
+                    accum
+                })
         } else {
             "No active channels".to_string()
         }
@@ -192,9 +195,7 @@ impl FromStr for Command {
         }
         let make_opt_chid = |s: Option<&str>| -> Result<Option<ChannelId>, String> {
             if let Some(s) = s {
-                ChannelId::try_from(s)
-                    .map_err(|e| e.to_string())
-                    .map(|s| Some(s))
+                ChannelId::try_from(s).map_err(|e| e.to_string()).map(Some)
             } else {
                 Ok(None)
             }
@@ -355,11 +356,10 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
                         chat_id,
                         format!(
                             "Please provide the channel name. For example:\n{}",
-                            state
-                                .channels
-                                .keys()
-                                .map(|id| format!("/subscribe_{id}\n"))
-                                .collect::<String>()
+                            state.channels.keys().fold(String::new(), |mut accum, id| {
+                                writeln!(&mut accum, "/subscribe_{id}").unwrap();
+                                accum
+                            })
                         ),
                     )
                     .await?
@@ -402,10 +402,10 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
                         } else {
                             format!(
                                 "Please provide the channel name. For example:\n{}",
-                                channels
-                                    .into_iter()
-                                    .map(|id| format!("/unsubscribe_{id}\n"))
-                                    .collect::<String>()
+                                channels.into_iter().fold(String::new(), |mut accum, id| {
+                                    writeln!(&mut accum, "/unsubscribe_{id}").unwrap();
+                                    accum
+                                })
                             )
                         },
                     )

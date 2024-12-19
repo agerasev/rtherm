@@ -101,7 +101,7 @@ where
             .fetch_all(&mut self.client)
             .await?;
         assert!(rows.len() < 2);
-        match rows.get(0) {
+        match rows.first() {
             Some(row) => Ok(Some(row.try_get(0)?)),
             None => Ok(None),
         }

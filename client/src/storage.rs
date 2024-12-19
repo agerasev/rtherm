@@ -46,7 +46,7 @@ pub struct MemStorageGuard<'a> {
     storage: &'a mut MemStorage,
 }
 
-impl<'a> Deref for MemStorageGuard<'a> {
+impl Deref for MemStorageGuard<'_> {
     type Target = Measurements;
     fn deref(&self) -> &Self::Target {
         &self.storage.measurements
