@@ -16,7 +16,7 @@ impl Provider for W1Therm {
         };
         let mut sensors = HashMap::new();
         let mut errors = Vec::new();
-        loop {
+        'sensors: loop {
             let entry = match entries.next_entry().await {
                 Ok(Some(x)) => x,
                 Ok(None) => break,
@@ -30,25 +30,33 @@ impl Provider for W1Therm {
             if name.starts_with("w1_bus_master") {
                 continue;
             }
-            let bytes = match fs::read(entry.path().join("temperature")).await {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    errors.push(err);
-                    continue;
-                }
-            };
-            let value = match String::from_utf8(bytes)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-                .and_then(|s| {
-                    s.trim()
-                        .parse::<i32>()
+            let value = {
+                let mut values = [0.0; 3];
+                for value in &mut values {
+                    let bytes = match fs::read(entry.path().join("temperature")).await {
+                        Ok(bytes) => bytes,
+                        Err(err) => {
+                            errors.push(err);
+                            continue;
+                        }
+                    };
+                    *value = match String::from_utf8(bytes)
                         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-                }) {
-                Ok(raw) => raw as f64 * 1e-3,
-                Err(err) => {
-                    errors.push(err);
-                    continue;
+                        .and_then(|s| {
+                            s.trim()
+                                .parse::<i32>()
+                                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+                        }) {
+                        Ok(raw) => raw as f64 * 1e-3,
+                        Err(err) => {
+                            errors.push(err);
+                            continue 'sensors;
+                        }
+                    };
                 }
+                // Median filter
+                values.sort_by(f64::total_cmp);
+                values[values.len() / 2]
             };
             sensors.insert(
                 name,
