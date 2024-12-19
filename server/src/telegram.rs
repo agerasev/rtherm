@@ -63,7 +63,7 @@ impl RangeExt for RangeInclusive<f64> {
 impl Default for CommonSettings {
     fn default() -> Self {
         Self {
-            offline_timeout: Duration::from_secs(2 * 60),
+            offline_timeout: Duration::from_secs(4 * 60),
             hysteresis: 5.0,
         }
     }
