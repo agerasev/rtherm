@@ -2,3 +2,4 @@
 /config/*
 !/config/example.toml
 /docker/bin
+/docker/.env

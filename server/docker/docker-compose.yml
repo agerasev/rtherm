@@ -8,6 +8,10 @@ services:
     environment:
       - RTHERM_CONFIG=docker.toml
       - RUST_LOG=info
+      - HTTPS_PROXY=${RTHERM_HTTPS_PROXY:-}
+      - NO_PROXY=localhost,127.0.0.1,::1,postgres
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - /data/rtherm/server:/srv
     ports:
