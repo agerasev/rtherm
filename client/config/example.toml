@@ -4,6 +4,9 @@ server = "http://127.0.0.1:4100"
 period = 60 # seconds
 connect_timeout = 10 # seconds, including DNS and TLS handshake
 request_timeout = 30 # seconds for the entire HTTP request
+buffer_path = "rtherm-buffer.sqlite3" # relative to the working directory; parent must exist
+batch_size = 500 # maximum readings per upload, from 1 to 1000
+retry_interval = 5 # initial retry delay in seconds; doubles up to 60 seconds
 
 providers = ["dummy"]
 

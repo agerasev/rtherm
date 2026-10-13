@@ -45,14 +45,21 @@ server = "{server}"
 period = 0.05
 connect_timeout = {connect_timeout}
 request_timeout = {request_timeout}
+retry_interval = 0.05
 providers = ["dummy"]
 name_map = {{}}
 "#
         ),
     )
     .unwrap();
+    let (child, logs) = restart_client(&dir);
+    (child, logs, dir)
+}
+
+fn restart_client(dir: &ConfigDir) -> (Child, JoinHandle<String>) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_rtherm-client"))
-        .arg(config)
+        .arg(dir.0.join("client.toml"))
+        .current_dir(&dir.0)
         .env("RUST_LOG", "info")
         .env("NO_PROXY", "*")
         .env("no_proxy", "*")
@@ -67,7 +74,7 @@ name_map = {{}}
         stderr.read_to_string(&mut logs).await.unwrap();
         logs
     });
-    (child, logs, dir)
+    (child, logs)
 }
 
 async fn stop_client(mut child: Child, logs: JoinHandle<String>) -> String {
@@ -107,6 +114,154 @@ async fn acknowledge(mut stream: TcpStream) {
         .await
         .unwrap();
     stream.shutdown().await.unwrap();
+}
+
+async fn open_buffer(dir: &ConfigDir) -> sqlx::SqliteConnection {
+    use sqlx::Connection;
+    sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new().filename(dir.0.join("rtherm-buffer.sqlite3")),
+    )
+    .await
+    .unwrap()
+}
+
+async fn wait_for_count(conn: &mut sqlx::SqliteConnection, predicate: impl Fn(i64) -> bool) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pending_readings")
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+            if predicate(count) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("buffer count did not reach expected state");
+}
+
+#[tokio::test]
+async fn outage_and_sigkill_preserve_queue_then_restart_drains_bounded_batches() {
+    use sqlx::Connection;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (client, logs, dir) = start_client(
+        &format!("http://{}", listener.local_addr().unwrap()),
+        0.5,
+        0.2,
+    );
+    let (mut rejected, first) = receive_request(&listener).await;
+    let first_point = first.measurements.values().next().unwrap()[0];
+    rejected
+        .write_all(
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    rejected.shutdown().await.unwrap();
+    let (stalled, retry) = receive_request(&listener).await;
+    assert!(retry
+        .measurements
+        .values()
+        .flatten()
+        .any(|p| p.time == first_point.time && p.value == first_point.value));
+
+    // Sampling must commit to disk while the upload is stalled.
+    let mut conn = open_buffer(&dir).await;
+    wait_for_count(&mut conn, |n| n >= 8).await;
+    let logs = stop_client(client, logs).await; // SIGKILL, no graceful flush.
+    drop(stalled);
+    assert!(logs.contains("503"), "{logs}");
+    let expected: Vec<(String, f64, i64)> =
+        sqlx::query_as("SELECT channel, value, time_seconds FROM pending_readings ORDER BY id")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+    assert!(expected.len() >= 8);
+    conn.close().await.unwrap();
+    // Discard any already queued HTTP connection from the killed process.
+    while timeout(Duration::from_millis(50), listener.accept())
+        .await
+        .is_ok()
+    {}
+
+    let config = dir.0.join("client.toml");
+    let text = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace("providers = [\"dummy\"]", "providers = []")
+        .replace("period = 0.05", "period = 3600");
+    std::fs::write(&config, format!("{text}\nbatch_size = 3\n")).unwrap();
+    let (client, logs) = restart_client(&dir);
+    let mut received = Vec::new();
+    while received.len() < expected.len() {
+        let (stream, request) = receive_request(&listener).await;
+        let count = request.measurements.values().map(Vec::len).sum::<usize>();
+        assert!(
+            (1..=3).contains(&count),
+            "unbounded recovery batch: {count}"
+        );
+        for (channel, points) in request.measurements {
+            for point in points {
+                received.push((
+                    channel.to_string(),
+                    point.value,
+                    point
+                        .time
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64,
+                ));
+            }
+        }
+        acknowledge(stream).await;
+    }
+    assert_eq!(
+        received, expected,
+        "restart lost or duplicated queued readings"
+    );
+    let mut conn = open_buffer(&dir).await;
+    wait_for_count(&mut conn, |n| n == 0).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap(),
+        "ok"
+    );
+    conn.close().await.unwrap();
+    stop_client(client, logs).await;
+
+    // A second restart must not replay rows that were acknowledged and deleted.
+    let (client, logs) = restart_client(&dir);
+    assert!(timeout(Duration::from_millis(300), listener.accept())
+        .await
+        .is_err());
+    let logs = stop_client(client, logs).await;
+    assert!(logs.contains("0 readings pending"), "{logs}");
+}
+
+#[tokio::test]
+async fn redirect_is_not_an_acknowledgement() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (client, logs, _dir) = start_client(
+        &format!("http://{}", listener.local_addr().unwrap()),
+        0.5,
+        1.0,
+    );
+    let (mut stream, first) = receive_request(&listener).await;
+    let point = first.measurements.values().next().unwrap()[0];
+    stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: /login\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+    stream.shutdown().await.unwrap();
+    let (stream, retry) = receive_request(&listener).await;
+    assert!(retry
+        .measurements
+        .values()
+        .flatten()
+        .any(|p| p.time == point.time && p.value == point.value));
+    acknowledge(stream).await;
+    let logs = stop_client(client, logs).await;
+    assert!(logs.contains("Upload rejected with HTTP 302"), "{logs}");
 }
 
 #[tokio::test]
