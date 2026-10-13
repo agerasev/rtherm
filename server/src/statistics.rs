@@ -30,6 +30,63 @@ impl ChannelHistory {
     const MAX_LEN: usize = 20000;
     const MAX_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
 
+    pub fn recent(&self, hours: u8, now: SystemTime) -> Self {
+        let since = now
+            .checked_sub(Duration::from_secs(u64::from(hours) * 3600))
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        Self {
+            window: self
+                .window
+                .iter()
+                .copied()
+                .filter(|p| p.time >= since && p.time <= now)
+                .collect(),
+        }
+    }
+
+    /// Preserve bucket extrema so short temperature excursions remain visible.
+    pub fn chart_points(&self) -> Vec<Point> {
+        let points: Vec<_> = self.window.iter().copied().collect();
+        if points.len() <= 720 {
+            return points;
+        }
+        let mut result = vec![points[0]];
+        for bucket in points.chunks(points.len().div_ceil(359)) {
+            let min = bucket
+                .iter()
+                .min_by(|a, b| a.value.total_cmp(&b.value))
+                .unwrap();
+            let max = bucket
+                .iter()
+                .max_by(|a, b| a.value.total_cmp(&b.value))
+                .unwrap();
+            if min.time <= max.time {
+                result.extend([*min, *max]);
+            } else {
+                result.extend([*max, *min]);
+            }
+        }
+        result.push(*points.last().unwrap());
+        result.dedup_by(|a, b| a.time == b.time && a.value == b.value);
+        result
+    }
+
+    pub fn gaps(&self) -> Vec<u64> {
+        self.window
+            .iter()
+            .zip(self.window.iter().skip(1))
+            .filter(|(a, b)| {
+                b.time.duration_since(a.time).unwrap_or_default() > Duration::from_secs(240)
+            })
+            .map(|(_, b)| {
+                b.time
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            })
+            .collect()
+    }
+
     pub fn update(&mut self, points: impl IntoIterator<Item = Point>) {
         let mut points: Vec<_> = points.into_iter().collect();
         if let Some(last) = self.window.back() {
@@ -94,5 +151,33 @@ impl Display for ChannelStatistics {
         writeln!(f, "max: {:.1} °C", self.max)?;
         writeln!(f, "average: {:.1} °C", self.mean)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn chart_is_bounded_ordered_and_preserves_spikes_and_endpoints() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100000);
+        let mut history = ChannelHistory::default();
+        history.update((0..20000).map(|i| Point {
+            value: if i == 12345 { 100. } else { 10. },
+            time: now - Duration::from_secs(20000 - i),
+        }));
+        let chart = history.chart_points();
+        assert!(chart.len() <= 720);
+        assert_eq!(
+            chart.first().unwrap().time,
+            now - Duration::from_secs(20000)
+        );
+        assert_eq!(chart.last().unwrap().time, now - Duration::from_secs(1));
+        assert!(chart.iter().any(|p| p.value == 100.));
+        assert!(chart.windows(2).all(|w| w[0].time <= w[1].time));
+        assert_eq!(history.recent(1, now).window.len(), 3600);
+        assert!(history
+            .recent(1, now + Duration::from_secs(86400))
+            .window
+            .is_empty());
     }
 }

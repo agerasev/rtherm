@@ -217,9 +217,16 @@ async fn outage_and_sigkill_preserve_queue_then_restart_drains_bounded_batches()
         acknowledge(stream).await;
     }
     assert_eq!(
-        received, expected,
+        received.len(),
+        expected.len(),
         "restart lost or duplicated queued readings"
     );
+    for (received, expected) in received.iter().zip(&expected) {
+        assert_eq!(received.0, expected.0);
+        assert_eq!(received.2, expected.2);
+        // The JSON decoder may round by one ULP compared with SQLite's stored f64.
+        assert!((received.1 - expected.1).abs() <= f64::EPSILON * expected.1.abs().max(1.0) * 2.0);
+    }
     let mut conn = open_buffer(&dir).await;
     wait_for_count(&mut conn, |n| n == 0).await;
     assert_eq!(

@@ -5,14 +5,14 @@ use crate::{
     storage::{Storage, Stored, StoredLock},
 };
 use frankenstein::{
-    AllowedUpdate, AsyncApi, AsyncTelegramApi, GetUpdatesParams, Message, ParseMode,
+    AllowedUpdate, AsyncApi, AsyncTelegramApi, ChatType, GetUpdatesParams, Message, ParseMode,
     SendMessageParams, UpdateContent,
 };
 use rtherm_common::{ChannelId, Measurements, Point};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     fmt::Write,
     ops::RangeInclusive,
     str::FromStr,
@@ -222,6 +222,7 @@ impl FromStr for Command {
 
 pub struct Telegram<S: Storage> {
     api: AsyncApi,
+    allowed_user_ids: Arc<HashSet<u64>>,
     settings: SharedSettings<S>,
     state: SharedState,
 }
@@ -230,6 +231,7 @@ impl<S: Storage> Clone for Telegram<S> {
     fn clone(&self) -> Self {
         Self {
             api: self.api.clone(),
+            allowed_user_ids: self.allowed_user_ids.clone(),
             settings: self.settings.clone(),
             state: self.state.clone(),
         }
@@ -238,7 +240,11 @@ impl<S: Storage> Clone for Telegram<S> {
 
 type Error = <AsyncApi as AsyncTelegramApi>::Error;
 
-async fn send_message(api: &AsyncApi, chat: ChatId, text: impl Into<String>) -> Result<(), Error> {
+async fn send_message_unchecked(
+    api: &AsyncApi,
+    chat: ChatId,
+    text: impl Into<String>,
+) -> Result<(), Error> {
     api.send_message(
         &SendMessageParams::builder()
             .parse_mode(ParseMode::Html)
@@ -251,27 +257,59 @@ async fn send_message(api: &AsyncApi, chat: ChatId, text: impl Into<String>) -> 
 }
 
 impl<S: Storage + Sync + Send + 'static> Telegram<S> {
+    fn allows_chat(&self, chat_id: ChatId) -> bool {
+        u64::try_from(chat_id).is_ok_and(|id| id > 0 && self.allowed_user_ids.contains(&id))
+    }
+
+    fn allows_message(&self, msg: &Message) -> bool {
+        msg.chat.type_field == ChatType::Private
+            && msg.sender_chat.is_none()
+            && msg.from.as_ref().is_some_and(|user| {
+                !user.is_bot
+                    && i64::try_from(user.id).ok() == Some(msg.chat.id)
+                    && self.allows_chat(msg.chat.id)
+            })
+    }
+
+    // Check every outbound path too: old stored subscriptions must not bypass access control.
+    async fn send_message(&self, chat: ChatId, text: impl Into<String>) -> Result<(), Error> {
+        if !self.allows_chat(chat) {
+            return Ok(());
+        }
+        send_message_unchecked(&self.api, chat, text).await
+    }
+
     pub async fn new(config: TelegramConfig, storage: S) -> Self {
         let settings = Stored::load_or_default("telegram-state".to_string(), storage).await;
         let this = Self {
             api: AsyncApi::new(&config.token),
+            allowed_user_ids: Arc::new(config.allowed_user_ids),
             settings: Arc::new(StoredLock::new(settings)),
             state: SharedState::default(),
         };
+        log::info!(
+            "Telegram access restricted to {} configured users in private chats",
+            this.allowed_user_ids.len()
+        );
         spawn(this.clone().poll());
         spawn(this.clone().monitor());
         this
     }
 
     async fn process_message(&self, msg: Message) -> Result<(), Error> {
+        if !self.allows_message(&msg) {
+            log::debug!("Ignoring unauthorized Telegram message");
+            return Ok(());
+        }
         let chat = msg.chat.id;
         if let Some(text) = msg.text {
             match Command::from_str(&text) {
                 Ok(cmd) => self.process_command(chat, cmd).await?,
-                Err(reason) => send_message(&self.api, chat, format!("Error: {reason}")).await?,
+                Err(reason) => self.send_message(chat, format!("Error: {reason}")).await?,
             }
         } else {
-            send_message(&self.api, chat, "Error: Only text commands are supported").await?;
+            self.send_message(chat, "Error: Only text commands are supported")
+                .await?;
         };
         Ok(())
     }
@@ -306,12 +344,14 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
     }
 
     async fn process_command(&self, chat_id: ChatId, cmd: Command) -> Result<(), Error> {
+        if !self.allows_chat(chat_id) {
+            return Ok(());
+        }
         match cmd {
-            Command::Help => send_message(&self.api, chat_id, Command::HELP).await?,
+            Command::Help => self.send_message(chat_id, Command::HELP).await?,
             Command::Digest { channel } => {
                 let state = self.state.read().await;
-                send_message(
-                    &self.api,
+                self.send_message(
                     chat_id,
                     if let Some(id) = channel {
                         match state.channels.get(&id) {
@@ -335,8 +375,7 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
                         entry.or_default();
                         settings.async_drop().await;
                     }
-                    send_message(
-                        &self.api,
+                    self.send_message(
                         chat_id,
                         format!(
                             "You {} to channel <code>{}</code>.",
@@ -351,8 +390,7 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
                     .await?
                 } else {
                     let state = self.state.read().await;
-                    send_message(
-                        &self.api,
+                    self.send_message(
                         chat_id,
                         format!(
                             "Please provide the channel name. For example:\n{}",
@@ -374,8 +412,7 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
                         done = chat.subscriptions.remove(&channel).is_some();
                         settings.async_drop().await;
                     }
-                    send_message(
-                        &self.api,
+                    self.send_message(
                         chat_id,
                         format!(
                             "You {} channel <code>{}</code>.",
@@ -394,8 +431,7 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
                         Some(chat) => chat.subscriptions.keys().collect::<Vec<_>>(),
                         None => Vec::new(),
                     };
-                    send_message(
-                        &self.api,
+                    self.send_message(
                         chat_id,
                         if channels.is_empty() {
                             "You have not subscribed to any channel yet.".to_string()
@@ -445,7 +481,7 @@ impl<S: Storage + Sync + Send + 'static> Telegram<S> {
             }
 
             for (chat_id, message) in messages {
-                if let Err(err) = send_message(&self.api, chat_id, message).await {
+                if let Err(err) = self.send_message(chat_id, message).await {
                     log::error!("Cannot send message: {err}");
                 }
             }
@@ -529,11 +565,109 @@ impl<S: Storage + Sync + Send + 'static> Recepient for Telegram<S> {
 
         let mut errors = Vec::new();
         for (chat_id, message) in messages {
-            if let Err(err) = send_message(&self.api, chat_id, message).await {
+            if let Err(err) = self.send_message(chat_id, message).await {
                 errors.push(err);
             }
         }
 
         errors
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::MemStorage;
+    use serde_json::json;
+
+    async fn bot(ids: &[u64]) -> Telegram<MemStorage> {
+        Telegram {
+            api: AsyncApi::new_url("http://127.0.0.1:9/bot-test"),
+            allowed_user_ids: Arc::new(ids.iter().copied().collect()),
+            settings: Arc::new(StoredLock::new(
+                Stored::load_or_default("test".into(), MemStorage::default()).await,
+            )),
+            state: SharedState::default(),
+        }
+    }
+
+    fn message(user: u64, chat: i64, kind: &str) -> Message {
+        serde_json::from_value(json!({"message_id":1,"date":0,
+            "from":{"id":user,"is_bot":false,"first_name":"Test","username":"alexeywg"},
+            "chat":{"id":chat,"type":kind},"text":"/subscribe Water"}))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_allowlisted_users_in_their_own_private_chat_are_allowed() {
+        let bot = bot(&[7]).await;
+        assert!(bot.allows_message(&message(7, 7, "private")));
+        let mut renamed = message(7, 7, "private");
+        renamed.from.as_mut().unwrap().username = Some("new_username".into());
+        assert!(bot.allows_message(&renamed));
+        for msg in [
+            message(8, 8, "private"),
+            message(8, 7, "private"),
+            message(7, -7, "group"),
+            message(7, 7, "channel"),
+        ] {
+            bot.process_message(msg).await.unwrap(); // No network request or settings mutation.
+        }
+        let mut no_sender = message(7, 7, "private");
+        no_sender.from = None;
+        assert!(!bot.allows_message(&no_sender));
+        let mut automated = message(7, 7, "private");
+        automated.from.as_mut().unwrap().is_bot = true;
+        assert!(!bot.allows_message(&automated));
+        assert!(bot.settings.read().await.chats.is_empty());
+        assert!(!bot.allows_chat(-7));
+        assert!(!bot.allows_chat(0));
+    }
+
+    #[tokio::test]
+    async fn omitted_allowlist_denies_commands_and_all_outgoing_alerts() {
+        let config: TelegramConfig = toml::from_str("token = 'test'").unwrap();
+        assert!(config.allowed_user_ids.is_empty());
+        let mut bot = bot(&[]).await;
+        let channel = ChannelId::try_from("Water").unwrap();
+        {
+            let mut settings = bot.settings.write().await;
+            settings
+                .chats
+                .entry(7)
+                .or_default()
+                .subscriptions
+                .insert(channel.clone(), ChannelSubscription::default());
+            settings.async_drop().await;
+        }
+        bot.process_message(message(7, 7, "private")).await.unwrap();
+        bot.process_command(7, Command::Help).await.unwrap();
+        bot.send_message(7, "offline alert").await.unwrap();
+        let errors = bot
+            .update(
+                [(
+                    channel,
+                    vec![Point {
+                        value: 100.,
+                        time: std::time::SystemTime::now(),
+                    }],
+                )]
+                .into(),
+            )
+            .await;
+        assert!(
+            errors.is_empty(),
+            "revoked subscription attempted to send an alert"
+        );
+    }
+
+    #[tokio::test]
+    async fn authorized_command_still_creates_subscription() {
+        let bot = bot(&[7]).await;
+        // This test API endpoint deliberately refuses delivery; subscription mutation precedes the reply.
+        assert!(bot.process_message(message(7, 7, "private")).await.is_err());
+        assert!(bot.settings.read().await.chats[&7]
+            .subscriptions
+            .contains_key(&ChannelId::try_from("Water").unwrap()));
     }
 }

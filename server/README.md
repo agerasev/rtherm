@@ -1,5 +1,64 @@
 # rtherm-server
 
+## Telegram access
+
+Set an explicit numeric user allowlist alongside the bot token:
+
+```toml
+[telegram]
+token = "..."
+allowed_user_ids = [123456789]
+```
+
+An omitted or empty allowlist denies everyone. Only private messages from an
+allowed user in their own chat are accepted. Groups, channels, missing senders,
+and bot senders are ignored. Every outgoing reply and alert is checked too, so
+previously saved subscriptions cannot bypass a changed allowlist. Unauthorized
+subscriptions remain stored but receive no messages. Restart the server after
+changing the list. Use stable numeric IDs verified with Telegram, rather than
+usernames, which can change.
+
+## Device dashboard
+
+The dashboard groups sensor subcards inside device cards. Map the exact channel
+IDs reported by clients to readable labels:
+
+```toml
+[[dashboard.devices]]
+name = "Berezki"
+[dashboard.devices.sensors]
+BerezkiWater = "Water"
+BerezkiAir = "Air"
+
+[[dashboard.devices]]
+name = "Workshop"
+[dashboard.devices.sensors]
+WorkshopAir = "Air"
+```
+
+Configured sensors remain visible when readings are absent. Unmapped channels
+appear under **Unassigned device**. Duplicate mappings and empty labels are
+rejected. The UI shows reading age, reporting/stale status, selected-range
+statistics, and interactive 1/6/24-hour charts. A reading becomes stale after
+four minutes; this describes sensor freshness separately from server connectivity.
+Charts preserve extrema, cap each sensor at 720 plotted points, and leave gaps
+across outages. Hover or use keyboard arrows to inspect plotted readings.
+
+The server restores up to 24 hours of recent readings from its configured database
+at startup (at most 200,000 readings in total); ongoing history retains up to
+20,000 readings per channel. With no database, history starts with the process.
+The existing Grafana link provides the longer archive. Dashboard reads do not
+wait for recipient delivery, and failed browser requests retain the last displayed
+data, time out after eight seconds, and retry automatically.
+
+`GET /dashboard?hours=1|6|24` returns device mappings, latest readings, range
+statistics, and bounded chart points. The existing `/summary` API remains available.
+These HTTP endpoints keep the existing public access policy; the allowlist applies
+to Telegram only.
+
+Checks: `cargo test --locked -p rtherm-server` and
+`node server/tests/ui.test.mjs` (from the repository root).
+
 ## Telegram behind an HTTP proxy
 
 If the server cannot reach Telegram directly, configure an HTTPS proxy in

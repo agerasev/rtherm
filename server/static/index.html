@@ -1,16 +1,31 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
     <meta charset="utf-8" />
-    <title>RTherm</title>
-    <link rel="stylesheet" type="text/css" href="styles.css" />
-    <script type="module" src="main.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#eff3f7" />
+    <title>RTherm · Device temperatures</title>
+    <link rel="stylesheet" href="styles.css?v=2" />
+    <script type="module" src="main.js?v=2"></script>
 </head>
-
 <body>
-    <h2>Channels</h2>
-    <div id="channels"><i>Not connected</i></div>
+    <header class="topbar">
+        <a class="brand" href="./" aria-label="RTherm home"><span class="brand-icon" aria-hidden="true">°</span>RTherm<span class="brand-caption">Temperature monitor</span></a>
+        <div class="connection"><span class="status-dot" id="connection-dot"></span><span id="connection-status" role="status">Connecting</span></div>
+    </header>
+    <main>
+        <div class="page-heading">
+            <div><p class="eyebrow">YOUR ENVIRONMENT, AT A GLANCE</p><h1>Device temperatures</h1><p class="intro">Live readings and recent history from your sensors.</p></div>
+            <button id="refresh" class="refresh-button" type="button"><span aria-hidden="true">↻</span> Refresh</button>
+        </div>
+        <div class="toolbar">
+            <p id="overview">Waiting for readings</p>
+            <div class="range-control" role="group" aria-label="History time range"><span>History</span><button type="button" data-hours="1" aria-pressed="false">1 hour</button><button type="button" data-hours="6" aria-pressed="false">6 hours</button><button type="button" data-hours="24" aria-pressed="true">24 hours</button></div>
+        </div>
+        <div id="notice" class="notice" role="status" hidden></div>
+        <div id="devices" class="devices" aria-busy="true"><div class="empty-state"><span class="loading-ring" aria-hidden="true"></span><h2>Connecting to your devices</h2><p>Looking for the latest sensor readings.</p></div></div>
+        <footer><span id="last-check">Updates automatically every 10 seconds</span><span>Times are local · Temperatures in °C</span><a href="grafana/">Open full archive <span aria-hidden="true">↗</span></a></footer>
+    </main>
+    <noscript><p class="notice">Enable JavaScript to display live temperatures and history.</p></noscript>
 </body>
-
 </html>

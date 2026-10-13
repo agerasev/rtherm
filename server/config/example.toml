@@ -7,6 +7,12 @@ path = "../data/database.db"
 
 # [telegram]
 # token = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
+# allowed_user_ids = [123456789] # Telegram user IDs; omitted/empty denies everyone
 
 [storage]
 type = "db"
+
+[[dashboard.devices]]
+name = "Berezki"
+[dashboard.devices.sensors]
+BerezkiWater = "Water"
