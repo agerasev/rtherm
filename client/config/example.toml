@@ -2,5 +2,9 @@ prefix = "example"
 server = "http://127.0.0.1:4100"
 
 period = 60 # seconds
+connect_timeout = 10 # seconds, including DNS and TLS handshake
+request_timeout = 30 # seconds for the entire HTTP request
 
 providers = ["dummy"]
+
+[name_map]

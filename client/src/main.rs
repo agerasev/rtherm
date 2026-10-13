@@ -15,7 +15,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     env, mem,
     ops::Deref,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use storage::{MemStorage, Storage, StorageGuard};
 use tokio::{sync::mpsc::unbounded_channel as channel, time::sleep};
@@ -50,7 +50,16 @@ async fn main() -> ! {
         async move {
             let period = Duration::from_secs_f64(config.period);
             loop {
+                let started = Instant::now();
+                log::info!("Sampling started");
                 let (meas, errors) = providers.measure().await;
+                log::info!(
+                    "Sampling completed: {} readings from {} channels in {:.3}s ({} errors)",
+                    meas.values().map(Vec::len).sum::<usize>(),
+                    meas.len(),
+                    started.elapsed().as_secs_f64(),
+                    errors.len()
+                );
                 for err in errors {
                     log::error!("Provider error: {err}");
                 }
@@ -62,7 +71,11 @@ async fn main() -> ! {
         }
     });
 
-    let client = Client::new();
+    let client = Client::builder()
+        .connect_timeout(config.connect_timeout)
+        .timeout(config.request_timeout)
+        .build()
+        .expect("Cannot create HTTP client");
     let mut meas_buffer = Vec::new();
     loop {
         if consumer.recv_many(&mut meas_buffer, usize::MAX).await == 0 {
@@ -123,6 +136,13 @@ async fn main() -> ! {
                 None => meas,
             },
         };
+        let reading_count = request.measurements.values().map(Vec::len).sum::<usize>();
+        let started = Instant::now();
+        log::info!(
+            "Upload started: {reading_count} buffered readings from {} channels to '{}'",
+            request.measurements.len(),
+            config.server
+        );
         match client
             .post(format!("{}/provide", config.server))
             .json(&request)
@@ -131,7 +151,10 @@ async fn main() -> ! {
             .and_then(|res| res.error_for_status())
         {
             Ok(_) => {
-                log::debug!("Measurements sent to '{}'", config.server);
+                log::info!(
+                    "Upload completed: {reading_count} readings in {:.3}s",
+                    started.elapsed().as_secs_f64()
+                );
                 if let Some(guard) = guard {
                     if let Err(e) = guard.remove().await {
                         log::error!("Cannot clean up storage: {e}");
@@ -139,7 +162,11 @@ async fn main() -> ! {
                 }
             }
             Err(err) => {
-                log::error!("Error sending measurements: {err}");
+                log::error!(
+                    "Upload failed after {:.3}s (timeout={}): {err}; {reading_count} readings retained for retry",
+                    started.elapsed().as_secs_f64(),
+                    err.is_timeout()
+                );
                 continue;
             }
         }
